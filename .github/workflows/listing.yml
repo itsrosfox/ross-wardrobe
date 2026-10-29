@@ -1,0 +1,38 @@
+# Builds the VCC listing (index.json + an "Add to VCC" page) from this repo's releases and publishes it on GitHub Pages.
+# Runs after every release; run it by hand from the Actions tab after editing or deleting a release.
+name: VCC listing
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the listing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/listing/build_listing.py "$GITHUB_REPOSITORY" site
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,12 @@
+{
+  "name": "com.rosden.wardrobe",
+  "displayName": "Ros' Wardrobe",
+  "version": "0.1.0",
+  "unity": "2022.3",
+  "description": "Sims-style recolouring for avatar clothing: colours and gradients per garment part, presets, baked into a normal texture so it works with any shader (including locked Poiyomi).",
+  "author": {
+    "name": "Ros' den"
+  },
+  "documentationUrl": "https://github.com/itsrosfox/ross-wardrobe/blob/main/Packages/com.rosden.wardrobe/README.md",
+  "vpmDependencies": {}
+}

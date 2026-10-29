@@ -1,0 +1,44 @@
+# Run from the Actions tab after bumping "version" in Packages/com.rosden.wardrobe/package.json.
+# Zips the package, publishes it as a GitHub release named after the version, then rebuilds the VCC listing.
+name: Release
+
+on:
+  workflow_dispatch:
+
+env:
+  PACKAGE: com.rosden.wardrobe
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the version
+        id: version
+        run: echo "version=$(jq -r .version "Packages/$PACKAGE/package.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Zip the package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        # VCC wants package.json at the root of the zip
+        run: cd "Packages/$PACKAGE" && zip -r "$GITHUB_WORKSPACE/$PACKAGE-$VERSION.zip" .
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" "$PACKAGE-$VERSION.zip" \
+            --target "$GITHUB_SHA" --title "Ros' Wardrobe $VERSION" --generate-notes
+
+  # Releases made by a workflow don't trigger other workflows, so the listing is rebuilt from here.
+  listing:
+    needs: release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/listing.yml
