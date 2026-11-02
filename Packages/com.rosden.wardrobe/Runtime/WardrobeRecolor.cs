@@ -15,7 +15,15 @@ namespace RosDen.Wardrobe {
         public WardrobeGarment garment;
         public Renderer target;
         public int materialSlot;
-        public string lookName = "Original";
+        [Tooltip("Which material type (.rmat id) to use (empty = the garment's default)")]
+        public string materialType;
+        public string lookName = "Custom";
+        public const string CustomPreset = "custom";
+
+        [Tooltip("Id of the preset the look comes from (\"custom\" = Custom, empty = none picked yet)")]
+        public string preset = "";
+        [Tooltip("Which of the preset's looks: 0 = its own, 1.. = its colourways, -1 = its colours changed")]
+        public int variation;
         public WardrobeLook look = new WardrobeLook();
 
         [HideInInspector] public Texture2D bakedTexture;

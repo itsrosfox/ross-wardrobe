@@ -1,0 +1,102 @@
+{
+    "format": 1,
+    "id": "rosden.preset.solid",
+    "version": "1.0.0",
+    "name": "Solid",
+    "lookName": "Sunflower",
+    "group": "Plain",
+    "description": "One colour all over.",
+    "author": "Ros' den",
+    "order": 100,
+    "garments": [],
+    "parts": [
+        {
+            "region": "*",
+            "pattern": "rosden.solid",
+            "colors": [
+                "#E8B931"
+            ],
+            "scale": 1,
+            "rotate": false
+        }
+    ],
+    "colourways": [
+        {
+            "name": "White",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#F4F4F2"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Black",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#1A1A1C"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Heather Grey",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#9A9CA0"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Tomato",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#D9483B"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Forest",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#2F5E3E"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Royal Blue",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#2F4FB0"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Lilac",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#B9A2DB"
+                    ]
+                }
+            ]
+        }
+    ]
+}

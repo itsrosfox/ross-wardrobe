@@ -1,0 +1,80 @@
+{
+    "format": 1,
+    "id": "rosden.preset.gradient",
+    "version": "1.0.0",
+    "name": "Gradient",
+    "lookName": "Ocean",
+    "group": "Plain",
+    "description": "A colour fade from top to bottom.",
+    "author": "Ros' den",
+    "order": 101,
+    "garments": [],
+    "parts": [
+        {
+            "region": "*",
+            "pattern": "rosden.gradient",
+            "colors": [
+                "#BFE9F2@0, #2F7FB8@0.5, #13284D@1"
+            ],
+            "scale": 1,
+            "rotate": false
+        }
+    ],
+    "colourways": [
+        {
+            "name": "Sunset",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#FFB347@0, #FF5E7E@0.5, #6A3D9A@0.938"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Pastel",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#F7C6D9@0, #D6C8F2@0.5, #B9E2F2@1"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Fade to Black",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#F4F4F2@0, #1A1A1C@1"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Charcoal",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#FFFFFF@0, #161616@0.926"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Lime",
+            "parts": [
+                {
+                    "region": "*",
+                    "colors": [
+                        "#E9F59A@0, #7DBA3C@0.5, #1F5A3A@1"
+                    ]
+                }
+            ]
+        }
+    ]
+}

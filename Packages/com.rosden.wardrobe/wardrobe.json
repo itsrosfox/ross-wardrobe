@@ -1,0 +1,28 @@
+{
+    "format": 1,
+    "defaultPattern": "rosden.solid",
+    "patternGroups": ["Plain", "Blocks", "Graphics", "Stripes", "Checks", "Weaves", "Prints"],
+    "flatSurface": {
+        "metallic": 0,
+        "smoothness": 0.2,
+        "specular": 0.2
+    },
+    "importedFabric": {
+        "idPrefix": "imported.",
+        "group": "Weaves",
+        "colorName": "Colour",
+        "color": "#F4F4F2",
+        "tileWidth": 100,
+        "sheen": 0.15,
+        "sheenByName": [
+            { "words": ["velvet", "velour", "plush", "fleece"], "sheen": 0.9 },
+            { "words": ["corduroy", "cord"], "sheen": 0.7 },
+            { "words": ["flannel", "melton", "boiled", "wool", "felt"], "sheen": 0.45 },
+            { "words": ["knit", "jersey", "rib", "waffle", "pique", "tricot", "pointelle", "quilted", "dobby"], "sheen": 0.3 }
+        ]
+    },
+    "thumbnails": {
+        "background": "#3D3D42",
+        "ambient": "#73737A"
+    }
+}

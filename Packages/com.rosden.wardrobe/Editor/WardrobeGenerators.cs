@@ -29,7 +29,9 @@ namespace RosDen.Wardrobe.Editor {
             public float uvArea;
             public Vector3 center; // model space, area-weighted
             public Bounds bounds;  // model space
-            internal float weight;
+            internal float weight; // 3D area
+            /// <summary>Metres of garment per 1 UV unit on this island.</summary>
+            public float metresPerUv => uvArea > 0 ? Mathf.Sqrt(weight / uvArea) : 0f;
             internal bool hasBounds;
         }
 
@@ -37,6 +39,7 @@ namespace RosDen.Wardrobe.Editor {
             public Vector3[] vertices;
             public Vector2[] uv;
             public int[] triangles;
+            public Vector3[] normals;
         }
 
         // ---------------------------------------------------------------- ID map
@@ -96,7 +99,7 @@ namespace RosDen.Wardrobe.Editor {
             byte[] png = tex.EncodeToPNG();
             Object.DestroyImmediate(tex);
 
-            string path = $"{WardrobeAssets.FolderOf(g)}/{WardrobeAssets.FileName(WardrobeAssets.BaseName(g) + " ID")}.png";
+            string path = $"{WardrobeGarments.FolderOf(g)}/{WardrobeAssets.FileName(WardrobeAssets.BaseName(g) + " ID")}.png";
             var idMap = WardrobeAssets.WriteTexture(path, png, ti => {
                 ti.textureType = TextureImporterType.Default;
                 ti.sRGBTexture = false;
@@ -111,13 +114,17 @@ namespace RosDen.Wardrobe.Editor {
 
             Undo.RecordObject(g, "Generate ID Map");
             g.idMap = idMap;
+            g.partScales = sorted.Where(isl => isl.uvArea > 0)
+                .Select(isl => new WardrobePartScale { id = isl.color, metresPerUv = isl.metresPerUv }).ToList();
+            float uvTotal = sorted.Sum(isl => isl.uvArea);
+            g.metresPerUv = uvTotal > 0 ? Mathf.Sqrt(sorted.Sum(isl => isl.weight) / uvTotal) : 1f;
             if (createRegions) {
                 g.regions.Clear();
                 foreach (var isl in sorted)
                     g.regions.Add(new WardrobeRegion { name = $"Part {isl.index + 1}", ids = new List<Color32> { isl.color } });
             }
             EditorUtility.SetDirty(g);
-            AssetDatabase.SaveAssetIfDirty(g);
+            WardrobeGarments.Changed(g);
             return sorted;
         }
 
@@ -208,7 +215,7 @@ namespace RosDen.Wardrobe.Editor {
             var data = new ushort[size * size];
             for (int i = 0; i < data.Length; i++) data[i] = (ushort)Mathf.RoundToInt(Mathf.Clamp01(values[i]) * 65535f);
 
-            string path = $"{WardrobeAssets.FolderOf(g)}/{WardrobeAssets.FileName(WardrobeAssets.BaseName(g) + " Gradient")}.png";
+            string path = $"{WardrobeGarments.FolderOf(g)}/{WardrobeAssets.FileName(WardrobeAssets.BaseName(g) + " Gradient")}.png";
             var gradientMap = WardrobeAssets.WriteTexture(path, Png16.EncodeGray(data, size, size), ti => {
                 ti.textureType = TextureImporterType.Default;
                 ti.sRGBTexture = false;
@@ -229,7 +236,89 @@ namespace RosDen.Wardrobe.Editor {
             Undo.RecordObject(g, "Generate Gradient Map");
             g.gradientMap = gradientMap;
             EditorUtility.SetDirty(g);
-            AssetDatabase.SaveAssetIfDirty(g);
+            WardrobeGarments.Changed(g);
+        }
+
+        // ---------------------------------------------------------------- authoring hybrid and complete patterns
+
+        /// <summary>Where every texel of a square map on a garment's UVs sits on it, for scripts that draw a hybrid
+        /// pattern's id mask or gradient map, or a complete pattern's picture, from the garment's shape.</summary>
+        public class Surface {
+            public int size;
+            public bool[] covered;       // on the garment (else padding / empty)
+            public Vector3[] position;   // model space (as dropped in a scene: Y up, Z forward), metres
+            public Vector3[] normal;     // model space
+            public int[] region;         // index into the garment's regions, -1 = none
+            public Bounds bounds;        // of the whole mesh
+
+            /// <summary>The texel's position across the garment's bounds, 0..1 per axis.</summary>
+            public Vector3 Across(int i) => new Vector3(
+                (position[i].x - bounds.min.x) / Mathf.Max(bounds.size.x, 1e-6f),
+                (position[i].y - bounds.min.y) / Mathf.Max(bounds.size.y, 1e-6f),
+                (position[i].z - bounds.min.z) / Mathf.Max(bounds.size.z, 1e-6f));
+
+            /// <summary>Grows the covered texels' values outwards so filtering doesn't pull in the empty ones.</summary>
+            public void Pad<T>(T[] data) => Dilate(data, (bool[])covered.Clone(), size, PaddingFor(size));
+        }
+
+        public static Surface SampleSurface(WardrobeGarment g, int size) {
+            if (g.mesh == null) throw new InvalidOperationException("Assign the garment's mesh first.");
+            var m = ReadMesh(g.mesh);
+            var s = new Surface {
+                size = size, covered = new bool[size * size], position = new Vector3[size * size], normal = new Vector3[size * size],
+                region = Enumerable.Repeat(-1, size * size).ToArray(),
+                bounds = GeometryUtility.CalculateBounds(m.vertices, Matrix4x4.identity),
+            };
+            var tris = m.triangles;
+            for (int t = 0; t < tris.Length; t += 3) {
+                int a = tris[t], b = tris[t + 1], c = tris[t + 2];
+                Raster(m.uv[a] * size, m.uv[b] * size, m.uv[c] * size, size, (i, w0, w1, w2) => {
+                    s.covered[i] = true;
+                    s.position[i] = w0 * m.vertices[a] + w1 * m.vertices[b] + w2 * m.vertices[c];
+                    s.normal[i] = (w0 * m.normals[a] + w1 * m.normals[b] + w2 * m.normals[c]).normalized;
+                });
+            }
+            if (g.idMap != null) {
+                var id = new Texture2D(2, 2);
+                try {
+                    id.LoadImage(File.ReadAllBytes(AssetDatabase.GetAssetPath(g.idMap)));
+                    var pixels = id.GetPixels32();
+                    for (int i = 0; i < s.region.Length; i++) {
+                        if (!s.covered[i]) continue;
+                        int x = (i % size) * id.width / size, y = (i / size) * id.height / size;
+                        var c = pixels[y * id.width + x];
+                        s.region[i] = g.regions.FindIndex(r => r.ids.Any(k => k.r == c.r && k.g == c.g && k.b == c.b));
+                    }
+                } finally {
+                    Object.DestroyImmediate(id);
+                }
+            }
+            return s;
+        }
+
+        /// <summary>Writes a map for a pattern (RGBA PNG): <paramref name="colour"/> = sRGB (a picture), else linear
+        /// data (weights, gradient, mask).</summary>
+        public static Texture2D WriteMap(string path, Color32[] pixels, int size, bool colour) {
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false, !colour);
+            byte[] png;
+            try {
+                tex.SetPixels32(pixels);
+                png = tex.EncodeToPNG();
+            } finally {
+                Object.DestroyImmediate(tex);
+            }
+            return WardrobeAssets.WriteTexture(path, png, ti => {
+                ti.textureType = TextureImporterType.Default;
+                ti.sRGBTexture = colour;
+                ti.mipmapEnabled = false;
+                ti.filterMode = FilterMode.Bilinear;
+                ti.wrapMode = TextureWrapMode.Clamp;
+                ti.npotScale = TextureImporterNPOTScale.None;
+                ti.alphaSource = TextureImporterAlphaSource.FromInput;
+                ti.alphaIsTransparency = false;
+                ti.textureCompression = TextureImporterCompression.Uncompressed;
+                ti.maxTextureSize = Mathf.Max(32, size);
+            });
         }
 
         private static Vector3 Axis(GradientDirection d) {
@@ -253,10 +342,11 @@ namespace RosDen.Wardrobe.Editor {
             var data = ReadRawMesh(mesh);
             var matrix = ModelMatrix(mesh);
             for (int i = 0; i < data.vertices.Length; i++) data.vertices[i] = matrix.MultiplyPoint3x4(data.vertices[i]);
+            for (int i = 0; i < data.normals.Length; i++) data.normals[i] = matrix.MultiplyVector(data.normals[i]).normalized;
             return data;
         }
 
-        private static Matrix4x4 ModelMatrix(Mesh mesh) {
+        internal static Matrix4x4 ModelMatrix(Mesh mesh) {
             var model = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GetAssetPath(mesh));
             if (model == null) return Matrix4x4.identity;
             foreach (var smr in model.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -285,7 +375,8 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         private static MeshData Copy(Mesh mesh) {
-            var data = new MeshData { vertices = mesh.vertices, uv = mesh.uv, triangles = mesh.triangles };
+            var data = new MeshData { vertices = mesh.vertices, uv = mesh.uv, triangles = mesh.triangles, normals = mesh.normals };
+            if (data.normals == null || data.normals.Length != data.vertices.Length) data.normals = new Vector3[data.vertices.Length];
             if (data.uv == null || data.uv.Length != data.vertices.Length)
                 throw new InvalidOperationException($"Mesh '{mesh.name}' has no UVs.");
             return data;

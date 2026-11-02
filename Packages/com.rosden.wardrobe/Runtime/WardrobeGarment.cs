@@ -1,26 +1,68 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace RosDen.Wardrobe {
     /// <summary>
-    /// Everything needed to recolour one garment. Authored once per garment and shipped with it.
+    /// One garment fitted to one avatar base, read from its .rgarm file (the file is the source; this is what Ros'
+    /// Wardrobe imports it as). Avatars (.ravt), material types (.rmat), patterns (.rpat) and presets (.rpre) are
+    /// separate files that refer to garments by id, so anyone can add to a garment without touching it.
     /// </summary>
-    [CreateAssetMenu(menuName = "Ros' den/Wardrobe Garment", fileName = "Wardrobe Garment")]
     public class WardrobeGarment : ScriptableObject {
-        [Tooltip("Mesh the ID and gradient maps are generated from")]
+        [Tooltip("Stable id patterns and presets refer to the garment by (e.g. rosden.turtleneck); the same for every avatar " +
+                 "it's fitted to. Never change it once shipped")]
+        public string id;
+
+        [Tooltip("Name shown in the Ros' Wardrobe window")]
+        public string displayName;
+
+        [Tooltip("Browser category, e.g. Tops, Bottoms, Shoes, Accessories")]
+        public string category;
+
+        [Tooltip("Where it's worn, e.g. Top. Putting a garment on takes off the one in the same slot; empty = never swapped")]
+        public string slot;
+
+        [Tooltip("Shape keys on the avatar's body that hide what this garment covers (e.g. TShirt). Its own setup (VRCFury) " +
+                 "sets them in-game; editor tools read them here")]
+        public List<string> bodyHides = new List<string>();
+
+        public string version = "1.0.0";
+        public string author;
+
+        [Tooltip("Id of the avatar base (.ravt) this fit is for")]
+        public string avatarId;
+
+        [Tooltip("Which versions of the avatar: \"1\" = 1.x.x, empty = any")]
+        public string avatarVersion;
+
+        [Tooltip("Prefab the Ros' Wardrobe window puts on the avatar")]
+        public GameObject prefab;
+
+        [Tooltip("Picture in the Ros' Wardrobe window; rendered from the garment when empty")]
+        public Texture2D thumbnail;
+
+        [Tooltip("Mesh the ID and gradient maps are made from, and thumbnails are rendered with")]
         public Mesh mesh;
 
-        [Tooltip("Base colour texture the recolour is built on; its fabric/shading detail is kept")]
+        [Tooltip("Material type (.rmat id) the garment starts in; empty = the first that fits")]
+        public string defaultMaterial;
+
+        // ---------------------------------------------------------------- the garment's own maps
+
+        [Tooltip("Colour texture: looks are baked at its size and keep its alpha")]
         public Texture2D baseColor;
 
-        [Tooltip("Material the recoloured materials are copied from (e.g. the garment's locked Poiyomi material)")]
-        public Material material;
+        [Tooltip("Normal map; patterns' relief is added to it")]
+        public Texture2D normalMap;
 
-        [Tooltip("Texture property of that material that receives the recoloured texture")]
-        public string textureProperty = "_MainTex";
+        public MapChannel metalness = new MapChannel(0);
+        public MapChannel roughness = new MapChannel(0.8f);
+        public MapChannel occlusion = new MapChannel(1);
+        public MapChannel sheen = new MapChannel(0.2f);
+        [Tooltip("Without a texture: the base colour's alpha")]
+        public MapChannel opacity = new MapChannel(1);
 
-        [Range(0, 1), Tooltip("How much of the base texture's fabric/shading detail shows on recoloured parts")]
-        public float detail = 1f;
+        // ---------------------------------------------------------------- recolouring
 
         [Tooltip("One flat colour per part; regions group these colours")]
         public Texture2D idMap;
@@ -30,7 +72,13 @@ namespace RosDen.Wardrobe {
 
         public List<WardrobeRegion> regions = new List<WardrobeRegion>();
 
-        [Tooltip("Looks shipped with the garment, shown first in the recolour editor")]
-        public List<WardrobePreset> presets = new List<WardrobePreset>();
+        [Tooltip("Real-world size of each ID map part's UVs, so patterns tile at real size (filled in by Generate from UV islands)")]
+        public List<WardrobePartScale> partScales = new List<WardrobePartScale>();
+
+        [Tooltip("Metres of garment per 1 UV unit, for parts without their own scale")]
+        public float metresPerUv = 1f;
+
+        // Garment assets made before .rgarm files: what converting them needs.
+        [HideInInspector, FormerlySerializedAs("pbr")] public PbrSource legacyPbr = new PbrSource();
     }
 }

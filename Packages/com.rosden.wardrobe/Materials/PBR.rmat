@@ -1,0 +1,38 @@
+{
+    "format": 1,
+    "id": "rosden.pbr",
+    "name": "PBR",
+    "version": "1.0.0",
+    "author": "Ros' den",
+    "description": "Unity's Standard lighting, drawn on both sides of the cloth, for worlds, tools and platforms without Poiyomi.",
+    "shader": "Ros' Wardrobe/Standard Double Sided",
+    "textures": [
+        {
+            "property": "_MainTex",
+            "channels": "albedo"
+        },
+        {
+            "property": "_BumpMap",
+            "channels": "normal",
+            "keyword": "_NORMALMAP"
+        },
+        {
+            "property": "_MetallicGlossMap",
+            "channels": [
+                "metalness",
+                "occlusion",
+                0,
+                "smoothness"
+            ],
+            "alsoOn": [
+                "_OcclusionMap"
+            ],
+            "keyword": "_METALLICGLOSSMAP"
+        }
+    ],
+    "floats": {
+        "_GlossMapScale": 1,
+        "_Cull": 0
+    },
+    "garments": []
+}

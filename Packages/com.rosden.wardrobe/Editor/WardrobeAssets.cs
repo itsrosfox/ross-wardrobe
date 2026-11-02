@@ -22,8 +22,9 @@ namespace RosDen.Wardrobe.Editor {
             return name.Trim();
         }
 
-        /// <summary>The garment's name for generated files: "Hoodie Wardrobe" → "Hoodie".</summary>
+        /// <summary>The garment's name for generated files: its name, else its asset's ("Hoodie Wardrobe" → "Hoodie").</summary>
         public static string BaseName(WardrobeGarment g) {
+            if (!string.IsNullOrWhiteSpace(g.displayName)) return g.displayName.Trim();
             const string suffix = " Wardrobe";
             return g.name.EndsWith(suffix) && g.name.Length > suffix.Length ? g.name.Substring(0, g.name.Length - suffix.Length) : g.name;
         }

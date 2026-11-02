@@ -1,0 +1,16 @@
+{
+    "format": 1,
+    "id": "rosden.solid",
+    "version": "1.0.0",
+    "name": "Solid",
+    "group": "Plain",
+    "description": "One colour all over.",
+    "author": "Ros' den",
+    "colors": [
+        {
+            "name": "Colour",
+            "color": "#F4F4F2",
+            "canGradient": true
+        }
+    ]
+}
