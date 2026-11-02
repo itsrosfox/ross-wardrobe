@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 namespace RosDen.Wardrobe {
     /// <summary>
@@ -77,8 +76,5 @@ namespace RosDen.Wardrobe {
 
         [Tooltip("Metres of garment per 1 UV unit, for parts without their own scale")]
         public float metresPerUv = 1f;
-
-        // Garment assets made before .rgarm files: what converting them needs.
-        [HideInInspector, FormerlySerializedAs("pbr")] public PbrSource legacyPbr = new PbrSource();
     }
 }

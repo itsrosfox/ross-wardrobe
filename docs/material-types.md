@@ -27,11 +27,11 @@ are, so nothing is packed twice.
    except its textures. This is the **template**.
    - **Poiyomi:** lock the template material, so buyers don't need Poiyomi installed. Ship the locked shader with
      the pack, as you would for any Poiyomi garment.
-2. Open **Edit → Project Settings → Ros' Wardrobe**, tab **Materials**, and click **New Material Type…**.
-3. Drop in the **Template** (or just a **Shader**), set a **Name** (what buyers see, e.g. *Toon*) and an **Id**,
-   and click **Create**. Albedo and normal properties are filled in where the shader has the usual ones (`_MainTex`
-   or `_BaseMap`, and `_BumpMap`).
-4. In its editor, add the rest of the textures (below), and list the **Garments** it's for. None = every garment.
+2. Pick **Assets → Create → Ros' Wardrobe → Material Type** and name the file.
+3. Select it. In the Inspector, drop in the **Template** (or just a **Shader**), and set a **Name** (what buyers
+   see, e.g. *Toon*) and an **Id**. A new type puts the albedo in `_MainTex` and the normal map in `_BumpMap`;
+   change them if your shader uses other properties.
+4. Add the rest of the textures (below), list the **Garments** it's for (none = every garment), and click **Save**.
 5. On your garment's `.rgarm`, set **Starts In** to the new type.
 
 ## Textures
@@ -62,7 +62,6 @@ Ros' Shirts' **Toon** type, for a locked Poiyomi template:
 
 ```json
 {
-    "format": 1,
     "id": "rosden.toon",
     "name": "Toon",
     "version": "1.0.0",
@@ -85,7 +84,6 @@ The built-in **PBR** type, from a shader:
 
 ```json
 {
-    "format": 1,
     "id": "rosden.pbr",
     "name": "PBR",
     "version": "1.0.0",

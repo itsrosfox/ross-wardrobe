@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -16,8 +17,6 @@ namespace RosDen.Wardrobe.Editor {
         public string body = "Body";
         /// <summary>The body sliders the window shows, in order.</summary>
         public List<WardrobeSlider> sliders = new List<WardrobeSlider>();
-        /// <summary>The base's fur textures that skins recolour.</summary>
-        public List<WardrobeFur> fur = new List<WardrobeFur>();
 
         public string DisplayName => string.IsNullOrWhiteSpace(name) ? id : name;
     }
@@ -48,20 +47,11 @@ namespace RosDen.Wardrobe.Editor {
 
         public static WardrobeShapeValue Parse(string key, object value, string body) {
             if (value is bool b) return new WardrobeShapeValue { path = key, active = b };
-            if (!(value is JsonNumber n)) return null;
+            if (!(value is double weight)) return null;
             int colon = key.IndexOf(':');
-            return colon < 0 ? new WardrobeShapeValue { path = body, shape = key, weight = (float)n.Value }
-                : new WardrobeShapeValue { path = key.Substring(0, colon), shape = key.Substring(colon + 1), weight = (float)n.Value };
+            return colon < 0 ? new WardrobeShapeValue { path = body, shape = key, weight = (float)weight }
+                : new WardrobeShapeValue { path = key.Substring(0, colon), shape = key.Substring(colon + 1), weight = (float)weight };
         }
-    }
-
-    /// <summary>
-    /// A fur texture of an avatar base: by texture name, the brightness range its fur spans (darkest to lightest, 0-255) and
-    /// how much of a skin's colour ramp that covers (hair that only uses its darker part has less than 1).
-    /// </summary>
-    public class WardrobeFur {
-        public string texture;
-        public float dark = 0, light = 255, span = 1;
     }
 
     /// <summary>
@@ -88,7 +78,7 @@ namespace RosDen.Wardrobe.Editor {
                 string path = AssetDatabase.GetAssetPath(source);
                 if (!string.IsNullOrEmpty(path)) {
                     guids.Add(AssetDatabase.AssetPathToGUID(path));
-                    names.Add(System.IO.Path.GetFileNameWithoutExtension(path));
+                    names.Add(Path.GetFileNameWithoutExtension(path));
                 }
             }
             for (var p = PrefabUtility.GetCorrespondingObjectFromSource(avatar); p != null; p = PrefabUtility.GetCorrespondingObjectFromSource(p)) Add(p);
@@ -106,7 +96,7 @@ namespace RosDen.Wardrobe.Editor {
             var list = new List<WardrobeAvatar>();
             foreach (string path in WardrobeConfigs.Paths(WardrobeConfigs.Avatar)) {
                 try {
-                    var j = WardrobeJson.Parse(WardrobeMigrations.Read(path, WardrobeMigrations.Kind.Avatar));
+                    var j = WardrobeJson.Parse(File.ReadAllText(path));
                     var a = new WardrobeAvatar {
                         id = j.String("id").Trim(), name = j.String("name"), version = j.String("version"), author = j.String("author"),
                         description = j.String("description"), path = path,
@@ -120,13 +110,6 @@ namespace RosDen.Wardrobe.Editor {
                         foreach (var option in o.Objects("options"))
                             slider.options.Add((option.String("name").Trim(), Values(option.Object("set"), a.body)));
                         if (slider.name.Length > 0) a.sliders.Add(slider);
-                    }
-                    foreach (var o in j.Objects("fur")) {
-                        var range = (o.Array("range") ?? new List<object>()).OfType<JsonNumber>().Select(n => (float)n.Value).ToList();
-                        a.fur.Add(new WardrobeFur {
-                            texture = o.String("texture").Trim(), span = (float)o.Number("span", 1),
-                            dark = range.Count > 0 ? range[0] : 0, light = range.Count > 1 ? range[1] : 255,
-                        });
                     }
                     if (a.id.Length == 0) Debug.LogWarning($"[Ros' Wardrobe] {path} has no id");
                     else if (list.All(o => !WardrobeConfigs.SameId(o.id, a.id))) list.Add(a);

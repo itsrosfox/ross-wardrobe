@@ -11,7 +11,7 @@ namespace RosDen.Wardrobe.Editor {
     /// Ros' Wardrobe: pick an avatar in the scene and browse the garments fitted to its base (.rgarm files whose avatar is
     /// the base's .ravt), by category. Clicking one puts it on the avatar, taking off whatever is worn in its slot, and
     /// every look change is baked onto it as you make it. That's it: the garment's own setup (VRCFury) attaches it on
-    /// upload. Ctrl+Z undoes either. The Avatar section shapes the avatar's body and recolours its fur (skins).
+    /// upload. Ctrl+Z undoes either. The Avatar section shapes the avatar's body.
     /// </summary>
     public class WardrobeWindow : EditorWindow {
         private const string All = "All", AvatarSection = "Avatar";
@@ -25,8 +25,7 @@ namespace RosDen.Wardrobe.Editor {
         private WardrobeLookPanel _panel;
         private WardrobeAvatarPanel _avatarPanel;
         private List<WardrobeGarment> _garments;
-        private readonly Dictionary<WardrobeGarment, GameObject> _prefabs = new Dictionary<WardrobeGarment, GameObject>();
-        private Dictionary<WardrobeGarment, WardrobeRecolor> _worn = new Dictionary<WardrobeGarment, WardrobeRecolor>();
+        private Dictionary<WardrobeGarment, GameObject> _worn = new Dictionary<WardrobeGarment, GameObject>();   // by its root on the avatar
         private readonly Dictionary<WardrobeGarment, bool> _missingScripts = new Dictionary<WardrobeGarment, bool>();
         private List<GameObject> _sceneAvatars;
         private GameObject _baseOf;
@@ -52,7 +51,7 @@ namespace RosDen.Wardrobe.Editor {
         private void OnEnable() {
             titleContent = new GUIContent("Ros' Wardrobe", EditorGUIUtility.IconContent("Cloth Icon").image);
             _panel = new WardrobeLookPanel(Repaint);
-            _avatarPanel = new WardrobeAvatarPanel(Repaint);
+            _avatarPanel = new WardrobeAvatarPanel();
             EditorApplication.projectChanged += Reload;
             EditorApplication.hierarchyChanged += HierarchyChanged;
         }
@@ -61,7 +60,6 @@ namespace RosDen.Wardrobe.Editor {
             EditorApplication.projectChanged -= Reload;
             EditorApplication.hierarchyChanged -= HierarchyChanged;
             _panel.Dispose();
-            _avatarPanel.Dispose();
         }
 
         private void OnSelectionChange() {
@@ -73,7 +71,6 @@ namespace RosDen.Wardrobe.Editor {
         private void Reload() {
             _garments = null;
             _baseRevision = -1;
-            _prefabs.Clear();
             _missingScripts.Clear();
             Repaint();
         }
@@ -99,10 +96,7 @@ namespace RosDen.Wardrobe.Editor {
         private void OnGUI() {
             if (avatar == null) avatar = FindAvatar();
             if (_garments == null || _baseOf != avatar) _garments = FindGarments();
-            _worn = avatar == null ? new Dictionary<WardrobeGarment, WardrobeRecolor>()
-                : avatar.GetComponentsInChildren<WardrobeRecolor>(true)
-                    .Where(r => r.garment != null)
-                    .GroupBy(r => r.garment).ToDictionary(x => x.Key, x => x.First());
+            _worn = Worn();
 
             DrawToolbar();
             using (new EditorGUILayout.HorizontalScope()) {
@@ -131,10 +125,6 @@ namespace RosDen.Wardrobe.Editor {
                         Base != null ? $"Built on {Base.DisplayName} ({Path.GetFileName(Base.path)}), so its garments are listed"
                             : "No .ravt in the project matches this avatar, so every garment is listed"), EditorStyles.miniLabel);
                 GUILayout.FlexibleSpace();
-                if (GUILayout.Button(new GUIContent("Settings", "Make and edit garments, patterns, presets, avatars and material types, and update the " +
-                                                                "project's files after a Ros' Wardrobe update"),
-                        EditorStyles.toolbarButton))
-                    WardrobeProjectSettings.Open();
                 if (GUILayout.Button(new GUIContent("Refresh", "Look for new garments and redraw the pictures"), EditorStyles.toolbarButton)) {
                     WardrobeThumbnails.Clear();
                     Reload();
@@ -151,9 +141,7 @@ namespace RosDen.Wardrobe.Editor {
             category = categories[index];
             EditorGUILayout.Space(4);
             if (category == AvatarSection) {
-                _browserScroll = EditorGUILayout.BeginScrollView(_browserScroll);
-                _avatarPanel.DrawBrowser(avatar, Base, BrowserWidth);
-                EditorGUILayout.EndScrollView();
+                EditorGUILayout.LabelField("Shape the avatar's body on the right. Worn garments follow it.", EditorStyles.wordWrappedMiniLabel);
                 return;
             }
 
@@ -189,13 +177,13 @@ namespace RosDen.Wardrobe.Editor {
         private bool Card(Rect rect, WardrobeGarment g) {
             bool clicked = GUI.Button(rect, new GUIContent("", _worn.ContainsKey(g) ? "Worn: click to edit" : "Click to put it on"));
             if (Event.current.type != EventType.Repaint) return clicked;
-            _worn.TryGetValue(g, out var rc);
+            var rc = _worn.TryGetValue(g, out var root) ? Recolor(root, g) : null;
             var image = new Rect(rect.x + 4, rect.y + 4, rect.width - 8, rect.width - 8);
             var picture = g.thumbnail != null ? g.thumbnail : WardrobeThumbnails.Get(g, rc != null ? rc.look : null, rc != null ? rc.materialType : null, Repaint);
             if (picture != null) GUI.DrawTexture(image, picture, ScaleMode.ScaleAndCrop);
             else EditorGUI.DrawRect(image, new Color(0.5f, 0.5f, 0.5f, 0.15f));
             GUI.Label(new Rect(rect.x + 2, image.yMax + 2, rect.width - 4, 16), DisplayName(g), WardrobeLookPanel.CenteredLabel);
-            if (rc != null) {
+            if (root != null) {
                 var badge = new Rect(image.xMax - 40, image.y + 3, 37, 14);
                 EditorGUI.DrawRect(badge, new Color(0.2f, 0.55f, 0.3f, 0.9f));
                 GUI.Label(badge, "Worn", WardrobeLookPanel.CenteredLabel);
@@ -231,7 +219,9 @@ namespace RosDen.Wardrobe.Editor {
                     return;
                 }
 
-                bool worn = _worn.TryGetValue(selected, out var rc);
+                bool worn = _worn.TryGetValue(selected, out var root);
+                // put on by hand, it gets its Wardrobe Recolor when it's first edited
+                var rc = worn ? Recolor(root, selected) ?? AddRecolor(root, selected) : null;
                 using (new EditorGUILayout.HorizontalScope()) {
                     using (new EditorGUILayout.VerticalScope()) {
                         GUILayout.Label(DisplayName(selected), EditorStyles.largeLabel);
@@ -244,10 +234,10 @@ namespace RosDen.Wardrobe.Editor {
                     if (rc != null && GUILayout.Button(new GUIContent("Frame", "Show it in the Scene view"), GUILayout.Width(60))) Frame(rc);
                     if (worn) {
                         if (GUILayout.Button(new GUIContent("Select", "Select it in the Hierarchy"), GUILayout.Width(60))) {
-                            Selection.activeGameObject = rc.gameObject;
-                            EditorGUIUtility.PingObject(rc.gameObject);
+                            Selection.activeGameObject = root;
+                            EditorGUIUtility.PingObject(root);
                         }
-                        if (GUILayout.Button("Take Off", GUILayout.Width(70))) EditorApplication.delayCall += () => TakeOff(rc);
+                        if (GUILayout.Button("Take Off", GUILayout.Width(70))) EditorApplication.delayCall += () => TakeOff(root);
                     }
                 }
                 if (Base != null && !WardrobeGarments.Fits(selected, Base))
@@ -264,7 +254,7 @@ namespace RosDen.Wardrobe.Editor {
 
                 if (rc == null) {
                     _panel.SetTarget(null);
-                    if (PrefabFor(selected) == null)
+                    if (selected.prefab == null)
                         EditorGUILayout.HelpBox($"Couldn't find the prefab for {DisplayName(selected)}.", MessageType.Warning);
                     else if (GUILayout.Button("Put It On", GUILayout.Height(28))) {
                         var g = selected;
@@ -292,7 +282,7 @@ namespace RosDen.Wardrobe.Editor {
             foreach (var old in replaced) {
                 if (old == null) continue;
                 try {
-                    Undo.DestroyObjectImmediate(WornRoot(old));
+                    Undo.DestroyObjectImmediate(old);
                 } catch (InvalidOperationException) {
                     Debug.LogWarning($"[Ros' Wardrobe] {old.name} is part of the avatar's prefab, so it stays on; remove it there.");
                 }
@@ -303,35 +293,53 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         // Garments on the avatar worn in the same slot as g.
-        private List<WardrobeRecolor> SameSlot(WardrobeGarment g) =>
-            string.IsNullOrWhiteSpace(g.slot) ? new List<WardrobeRecolor>()
+        private List<GameObject> SameSlot(WardrobeGarment g) =>
+            string.IsNullOrWhiteSpace(g.slot) ? new List<GameObject>()
                 : _worn.Where(w => w.Key != g && string.Equals(w.Key.slot?.Trim(), g.slot.Trim(), StringComparison.OrdinalIgnoreCase))
                     .Select(w => w.Value).ToList();
 
-        private GameObject WornRoot(WardrobeRecolor rc) {
-            var root = PrefabUtility.GetNearestPrefabInstanceRoot(rc.gameObject) ?? rc.gameObject;
-            return root == avatar ? rc.gameObject : root;
+        // What the avatar wears: whatever has a Wardrobe Recolor for a garment, and copies of a garment's prefab (put
+        // on by hand, or without Ros' Wardrobe, they have none yet).
+        private Dictionary<WardrobeGarment, GameObject> Worn() {
+            var worn = new Dictionary<WardrobeGarment, GameObject>();
+            if (avatar == null) return worn;
+            foreach (var rc in avatar.GetComponentsInChildren<WardrobeRecolor>(true))
+                if (rc.garment != null && !worn.ContainsKey(rc.garment)) worn[rc.garment] = WornRoot(rc.gameObject);
+            var byPrefab = WardrobeGarments.All.Where(g => g.prefab != null)
+                .GroupBy(g => AssetDatabase.GetAssetPath(g.prefab)).ToDictionary(x => x.Key, x => x.First());
+            foreach (var t in avatar.GetComponentsInChildren<Transform>(true))
+                if (t.gameObject != avatar && PrefabUtility.IsAnyPrefabInstanceRoot(t.gameObject) && t.GetComponentInChildren<WardrobeRecolor>(true) == null &&
+                    byPrefab.TryGetValue(PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(t.gameObject), out var g) && !worn.ContainsKey(g))
+                    worn[g] = t.gameObject;
+            return worn;
+        }
+
+        private GameObject WornRoot(GameObject go) {
+            var root = PrefabUtility.GetNearestPrefabInstanceRoot(go) ?? go;
+            return root == avatar ? go : root;
         }
 
         private WardrobeRecolor Wear(WardrobeGarment g) {
             if (avatar == null || g == null) return null;
-            var prefab = PrefabFor(g);
+            var prefab = g.prefab;
             if (prefab == null) {
                 ShowNotification(new GUIContent($"Couldn't find the prefab for {DisplayName(g)}"));
                 return null;
             }
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, avatar.transform);
             Undo.RegisterCreatedObjectUndo(instance, "Put On " + DisplayName(g));
-            WardrobeBody.Follow(avatar);
+            var rc = Recolor(instance, g) ?? AddRecolor(instance, g);
+            WardrobeBody.Follow(avatar);   // takes on the body's shape keys (it finds garments by their Wardrobe Recolor)
             selected = g;
             Repaint();
-            return RecolorOf(instance, g);
+            return rc;
         }
 
-        private static WardrobeRecolor RecolorOf(GameObject instance, WardrobeGarment g) {
-            var rc = instance.GetComponentsInChildren<WardrobeRecolor>(true).FirstOrDefault(r => r.garment == g);
-            if (rc != null) return rc;
-            rc = instance.AddComponent<WardrobeRecolor>();
+        private static WardrobeRecolor Recolor(GameObject root, WardrobeGarment g) =>
+            root.GetComponentsInChildren<WardrobeRecolor>(true).FirstOrDefault(r => r.garment == g);
+
+        private static WardrobeRecolor AddRecolor(GameObject instance, WardrobeGarment g) {
+            var rc = Undo.AddComponent<WardrobeRecolor>(instance);
             rc.garment = g;
             rc.target = instance.GetComponentInChildren<SkinnedMeshRenderer>(true);
             if (rc.target == null) rc.target = instance.GetComponentInChildren<Renderer>(true);
@@ -341,16 +349,15 @@ namespace RosDen.Wardrobe.Editor {
         // Missing scripts on the prefab mean a tool it relies on (VRCFury, usually) isn't installed.
         private bool MissingScripts(WardrobeGarment g) {
             if (_missingScripts.TryGetValue(g, out bool missing)) return missing;
-            var prefab = PrefabFor(g);
+            var prefab = g.prefab;
             missing = prefab != null && prefab.GetComponentsInChildren<Transform>(true)
                 .Any(t => GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(t.gameObject) > 0);
             _missingScripts[g] = missing;
             return missing;
         }
 
-        private void TakeOff(WardrobeRecolor rc) {
-            if (rc == null) return;
-            var root = WornRoot(rc);
+        private void TakeOff(GameObject root) {
+            if (root == null) return;
             _panel.SetTarget(null);
             try {
                 Undo.DestroyObjectImmediate(root);
@@ -364,19 +371,6 @@ namespace RosDen.Wardrobe.Editor {
             var view = SceneView.lastActiveSceneView;
             if (view == null || rc.target == null) return;
             view.Frame(rc.target.bounds, false);
-        }
-
-        // The garment's prefab, or one next to the garment asset that uses it.
-        private GameObject PrefabFor(WardrobeGarment g) {
-            if (g.prefab != null) return g.prefab;
-            if (_prefabs.TryGetValue(g, out var found)) return found;
-            string dir = Path.GetDirectoryName(AssetDatabase.GetAssetPath(g)).Replace('\\', '/');
-            if (dir.EndsWith("_Assets")) dir = Path.GetDirectoryName(dir).Replace('\\', '/');
-            found = AssetDatabase.FindAssets("t:Prefab", new[] { dir })
-                .Select(guid => AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GUIDToAssetPath(guid)))
-                .FirstOrDefault(p => p != null && p.GetComponentsInChildren<WardrobeRecolor>(true).Any(r => r.garment == g));
-            _prefabs[g] = found;
-            return found;
         }
 
         // ---------------------------------------------------------------- lookup

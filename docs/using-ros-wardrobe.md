@@ -70,24 +70,12 @@ any other material, and you upload as usual.
 
 ## The Avatar section
 
-For avatar bases whose `.ravt` describes them, the **Avatar** section (first on the left) shapes the avatar itself.
-
-### Body
+For avatar bases whose `.ravt` describes them, the **Avatar** section (first on the left) shapes the avatar's body.
 
 - The base's **sliders** by group (Body, Head, Tail…), its **toggles** and **choices** (e.g. ears), and every other
   shape key of the body under *Other shape keys*.
 - Worn garments follow the body's shape keys of the same names, so a shirt stays fitted when you make the avatar
   buff or chonky.
-- **Save as Body Preset…** writes a `.rbody` (in `Assets/Wardrobe Recolors/<Avatar>/Bodies`). It shows as a card
-  on the left: click one to shape the body like it.
-
-### Skin
-
-- Recolours the fur with a gradient from its darkest parts to its lightest. Eyes and saturated markings stay as
-  they are.
-- Pick a skin on the left, or set a **Custom skin** and **Apply** it or **Save as Skin…** (a `.rskin`).
-- The recoloured textures and materials go in `Assets/Wardrobe Recolors/<Avatar>/Skins/<Skin>`. *Original* puts the
-  avatar's own materials back.
 
 These change the avatar in the editor only. In-game, the avatar's own menu can still change what it animates.
 
@@ -99,10 +87,6 @@ right avatar at the top. If your avatar is a renamed copy of the base, tick *Sho
 
 **It warns that a garment needs a tool I haven't installed.**
 Usually VRCFury. Install it through VCC: without it, the garment wouldn't be put on the avatar in-game.
-
-**Ros' Wardrobe says files need updating.**
-After an update of Ros' Wardrobe, open *Project Settings → Ros' Wardrobe → Updates* and let it update older files.
-It copies the originals to `Library/Ros' Wardrobe/Backups` first.
 
 **My look didn't upload.**
 Looks are baked before VRChat builds the avatar. If a look still shows only as a preview, close the window or save

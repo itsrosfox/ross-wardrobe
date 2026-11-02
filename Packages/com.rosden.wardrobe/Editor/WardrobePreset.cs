@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -88,19 +87,15 @@ namespace RosDen.Wardrobe.Editor {
             }
             return _looks[(g, v)] = look;
         }
-
-        public static bool IsPresetFile(string path) => string.Equals(Path.GetExtension(path ?? ""), WardrobeConfigs.Preset, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Every .rpre in the project, read once and again whenever one changes.</summary>
     public static class WardrobePresets {
-        private static int Format => WardrobeMigrations.Current(WardrobeMigrations.Kind.Preset);
         public const string SavedGroup = "Saved";
         private static List<WardrobePreset> _all;
 
         [Serializable]
         private class Json {
-            public int format = Format;
             public string id, version, name, lookName, group, description, author;
             public int order;
             public GarmentJson[] garments = new GarmentJson[0];
@@ -143,20 +138,17 @@ namespace RosDen.Wardrobe.Editor {
         /// <summary>The presets made for a garment, in order.</summary>
         public static List<WardrobePreset> For(WardrobeGarment g) => All.Where(p => p.Fits(g)).ToList();
 
-        public static WardrobePreset Get(string id) =>
-            string.IsNullOrWhiteSpace(id) ? null : All.FirstOrDefault(p => string.Equals(p.id, id.Trim(), StringComparison.OrdinalIgnoreCase));
+        public static WardrobePreset Get(string id) => string.IsNullOrWhiteSpace(id) ? null : All.FirstOrDefault(p => WardrobeConfigs.SameId(p.id, id));
 
         public static void Forget() => _all = null;
 
-        private static IEnumerable<string> Files() => WardrobeConfigs.Paths(WardrobeConfigs.Preset);
-
         private static void Load() {
             var list = new List<WardrobePreset>();
-            foreach (string path in Files()) {
+            foreach (string path in WardrobeConfigs.Paths(WardrobeConfigs.Preset)) {
                 var preset = Read(path);
                 if (preset == null) continue;
                 // the same preset shipped by several packs: offered for every garment any of them is for
-                var same = list.FirstOrDefault(p => string.Equals(p.id, preset.id, StringComparison.OrdinalIgnoreCase));
+                var same = list.FirstOrDefault(p => WardrobeConfigs.SameId(p.id, preset.id));
                 if (same == null) list.Add(preset);
                 else if (same.garments.Count > 0 && preset.garments.Count == 0) same.garments.Clear();
                 else if (same.garments.Count > 0)
@@ -167,7 +159,7 @@ namespace RosDen.Wardrobe.Editor {
 
         private static Json ReadJson(string jsonPath) {
             try {
-                return JsonUtility.FromJson<Json>(WardrobeMigrations.Read(jsonPath, WardrobeMigrations.Kind.Preset));
+                return JsonUtility.FromJson<Json>(File.ReadAllText(jsonPath));
             } catch (Exception e) {
                 Debug.LogWarning($"[Ros' Wardrobe] Couldn't read {jsonPath}: {e.Message}");
                 return null;
@@ -192,7 +184,7 @@ namespace RosDen.Wardrobe.Editor {
                 if (string.IsNullOrWhiteSpace(part.region) || preset.parts.Any(p => p.region == part.region.Trim())) continue;
                 preset.parts.Add(new WardrobePreset.Part {
                     region = part.region.Trim(), pattern = part.pattern ?? "",
-                    colors = (part.colors ?? new string[0]).Select(ParseSlot).ToList(),
+                    colors = (part.colors ?? new string[0]).Select(WardrobeConfigs.Slot).ToList(),
                     scale = part.scale > 0 ? part.scale : 1f, rotate = part.rotate,
                 });
             }
@@ -204,7 +196,7 @@ namespace RosDen.Wardrobe.Editor {
                         Debug.LogWarning($"[Ros' Wardrobe] {jsonPath}: colourway '{cw.name}' recolours '{part.region}', which the preset doesn't set");
                         continue;
                     }
-                    colourway.colors[region] = (part.colors ?? new string[0]).Select(ParseSlot).ToList();
+                    colourway.colors[region] = (part.colors ?? new string[0]).Select(WardrobeConfigs.Slot).ToList();
                 }
                 preset.colourways.Add(colourway);
             }
@@ -226,7 +218,7 @@ namespace RosDen.Wardrobe.Editor {
             json.name = name;
             json.parts = look.styles.Where(s => s != null && !string.IsNullOrWhiteSpace(s.region)).Select(s => new PartJson {
                 region = s.region, pattern = s.pattern ?? "", scale = s.scale, rotate = s.rotate,
-                colors = (s.colors ?? new List<SlotColor>()).Select(FormatSlot).ToArray(),
+                colors = (s.colors ?? new List<SlotColor>()).Select(WardrobeConfigs.Write).ToArray(),
             }).ToArray();
             Write(jsonPath, json);
             return jsonPath;
@@ -257,23 +249,7 @@ namespace RosDen.Wardrobe.Editor {
             Forget();
         }
 
-        // "#RRGGBB", or "#RRGGBB@0, #RRGGBB@1" for a gradient.
-        private static SlotColor ParseSlot(string text) {
-            var stops = (text ?? "").Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray();
-            if (stops.Length <= 1 && !(text ?? "").Contains("@"))
-                return new SlotColor { color = WardrobeSettings.Color(stops.FirstOrDefault(), Color.white) };
-            var gradient = WardrobePatterns.ParseGradient(stops);
-            return new SlotColor { color = gradient.Evaluate(0), useGradient = true, gradient = gradient };
-        }
-
-        private static string FormatSlot(SlotColor c) {
-            if (c == null) return "";
-            if (!c.useGradient || c.gradient == null) return "#" + ColorUtility.ToHtmlStringRGB(c.color);
-            return string.Join(", ", c.gradient.colorKeys.Select(k =>
-                $"#{ColorUtility.ToHtmlStringRGB(k.color)}@{Math.Round(k.time, 3).ToString(CultureInfo.InvariantCulture)}"));
-        }
 
         private static string Kebab(string s) => Regex.Replace((s ?? "").ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
-
     }
 }

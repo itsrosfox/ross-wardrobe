@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -10,18 +9,11 @@ using Object = UnityEngine.Object;
 namespace RosDen.Wardrobe.Editor {
     /// <summary>Edits one .rpre: a ready-made look, its parts and colourways.</summary>
     internal class WardrobePresetForm : WardrobeJsonForm {
-        private static readonly string[] PresetOrder = {
-            "format", "id", "version", "name", "lookName", "group", "description", "author", "order", "garments", "parts", "colourways",
-        };
-        private static readonly string[] PartOrder = { "region", "pattern", "colors", "scale", "rotate" };
-        private static readonly string[] ColourwayOrder = { "name", "parts" };
-        private static readonly string[] ColourwayPartOrder = { "region", "colors" };
 
-        public WardrobePresetForm(string path) : base(path, WardrobeMigrations.Kind.Preset) { }
+        public WardrobePresetForm(string path) : base(path) { }
 
-        protected override string[] Order => PresetOrder;
 
-        protected override ICollection<string> Always => new[] { "format", "id", "version", "name", "group", "description", "author", "parts" };
+        protected override ICollection<string> Always => new[] { "id", "version", "name", "group", "description", "author", "parts" };
 
         protected override void DrawJson(JsonObject j) {
             Header("Preset");
@@ -51,8 +43,8 @@ namespace RosDen.Wardrobe.Editor {
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox)) {
                     using (new EditorGUILayout.HorizontalScope()) {
                         EditorGUI.BeginChangeCheck();
-                        string region = Suggest(new GUIContent("Region"), part.String("region"), Regions(j), v => Set(part, "region", v, false, PartOrder));
-                        if (EditorGUI.EndChangeCheck()) Set(part, "region", region, false, PartOrder);
+                        string region = Suggest(new GUIContent("Region"), part.String("region"), Regions(j), v => Set(part, "region", v, false));
+                        if (EditorGUI.EndChangeCheck()) Set(part, "region", region, false);
                         if (GUILayout.Button(new GUIContent("✕", "Remove"), EditorStyles.miniButton, GUILayout.Width(22))) {
                             parts.RemoveAt(i);
                             GUIUtility.ExitGUI();
@@ -61,18 +53,18 @@ namespace RosDen.Wardrobe.Editor {
                     EditorGUI.BeginChangeCheck();
                     string pattern = Suggest(new GUIContent("Pattern", "A .rpat id"), part.String("pattern"),
                         WardrobePatterns.All.Select(p => (p.id, $"{(string.IsNullOrWhiteSpace(p.group) ? "" : p.group + "/")}{p.DisplayName}  ({p.id})")),
-                        v => Set(part, "pattern", v, false, PartOrder));
-                    if (EditorGUI.EndChangeCheck()) Set(part, "pattern", pattern, false, PartOrder);
+                        v => Set(part, "pattern", v, false));
+                    if (EditorGUI.EndChangeCheck()) Set(part, "pattern", pattern, false);
                     var known = WardrobePatterns.Get(part.String("pattern"));
                     if (known == null && part.String("pattern").Trim().Length > 0)
                         EditorGUILayout.LabelField("No pattern with this id in the project.", EditorStyles.miniLabel);
-                    Colours(part, "colors", known, PartOrder);
+                    Colours(part, "colors", known);
                     EditorGUI.BeginChangeCheck();
                     float scale = EditorGUILayout.FloatField(new GUIContent("Scale", "Pattern size (1 = as made)"), (float)part.Number("scale", 1));
-                    if (EditorGUI.EndChangeCheck()) Set(part, "scale", new JsonNumber(Math.Round(Mathf.Max(0.01f, scale), 3)), false, PartOrder);
+                    if (EditorGUI.EndChangeCheck()) Set(part, "scale", Math.Round(Mathf.Max(0.01f, scale), 3), false);
                     EditorGUI.BeginChangeCheck();
                     bool rotate = EditorGUILayout.Toggle(new GUIContent("Rotate", "Turned 90°"), part.Bool("rotate"));
-                    if (EditorGUI.EndChangeCheck()) Set(part, "rotate", rotate, false, PartOrder);
+                    if (EditorGUI.EndChangeCheck()) Set(part, "rotate", rotate, false);
                 }
             }
             if (GUILayout.Button("Add Part", GUILayout.Width(160))) {
@@ -80,7 +72,7 @@ namespace RosDen.Wardrobe.Editor {
                 part["region"] = parts.Count == 0 ? WardrobePreset.AnyRegion : "";
                 part["pattern"] = WardrobePatterns.Get(null)?.id ?? "";
                 part["colors"] = new List<object> { "#F4F4F2" };
-                part["scale"] = new JsonNumber(1);
+                part["scale"] = 1.0;
                 part["rotate"] = false;
                 parts.Add(part);
                 Set(j, "parts", parts, false);
@@ -95,7 +87,7 @@ namespace RosDen.Wardrobe.Editor {
                 if (!(ways[i] is JsonObject way)) continue;
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox)) {
                     using (new EditorGUILayout.HorizontalScope()) {
-                        Text(way, "name", "Name", null, ColourwayOrder);
+                        Text(way, "name", "Name");
                         if (GUILayout.Button(new GUIContent("✕", "Remove"), EditorStyles.miniButton, GUILayout.Width(22))) {
                             ways.RemoveAt(i);
                             if (ways.Count == 0) j.Remove("colourways");
@@ -115,7 +107,7 @@ namespace RosDen.Wardrobe.Editor {
                             }
                         }
                         if (part == null) EditorGUILayout.HelpBox("The preset has no part with this region.", MessageType.Warning);
-                        Colours(wp, "colors", WardrobePatterns.Get(part?.String("pattern")), ColourwayPartOrder);
+                        Colours(wp, "colors", WardrobePatterns.Get(part?.String("pattern")));
                     }
                     var missing = regions.Where(r => wayParts.OfType<JsonObject>().All(p => p.String("region") != r)).ToList();
                     if (missing.Count > 0 && GUILayout.Button("Recolour a Part", EditorStyles.miniButton, GUILayout.Width(120))) {
@@ -128,7 +120,7 @@ namespace RosDen.Wardrobe.Editor {
                                 var from = parts.OfType<JsonObject>().First(p => p.String("region") == picked);
                                 wp["colors"] = (from.Array("colors") ?? new List<object>()).ToList();
                                 wayParts.Add(wp);
-                                Set(way, "parts", wayParts, false, ColourwayOrder);
+                                Set(way, "parts", wayParts, false);
                                 repaint?.Invoke();
                             });
                         }
@@ -147,14 +139,14 @@ namespace RosDen.Wardrobe.Editor {
 
         // The regions the garments it's for have, and *.
         private static IEnumerable<(string, string)> Regions(JsonObject j) {
-            var targets = WardrobePatterns.ReadTargets(j);
+            var targets = WardrobeConfigs.Targets(j);
             var garments = WardrobeGarments.All.Where(g => targets.Count == 0 || targets.Any(t => t.Matches(g)));
             return new[] { (WardrobePreset.AnyRegion, "* (every other part)") }
                 .Concat(garments.SelectMany(g => g.regions.Select(r => r.name)).Distinct().OrderBy(r => r).Select(r => (r, r)));
         }
 
         // A list of slot colours: "#RRGGBB", or a gradient as "#RRGGBB@0, #RRGGBB@1".
-        private void Colours(JsonObject o, string key, WardrobePattern pattern, string[] order) {
+        private void Colours(JsonObject o, string key, WardrobePattern pattern) {
             var colors = o.Array(key) ?? new List<object>();
             int count = Mathf.Max(colors.Count, pattern?.slots.Count ?? 1);
             for (int i = 0; i < count; i++) {
@@ -166,25 +158,24 @@ namespace RosDen.Wardrobe.Editor {
                     EditorGUI.BeginChangeCheck();
                     string value = text;
                     if (gradient) {
-                        var g = WardrobePatterns.ParseGradient(text.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray()) ?? SlotColor.Constant(Color.white);
-                        g = EditorGUILayout.GradientField(new GUIContent(label), g);
-                        value = string.Join(", ", g.colorKeys.Select(k => $"{Hex(k.color)}@{Math.Round(k.time, 3).ToString(CultureInfo.InvariantCulture)}"));
+                        var g = WardrobeConfigs.Gradient(text) ?? SlotColor.Constant(Color.white);
+                        value = WardrobeConfigs.Write(EditorGUILayout.GradientField(new GUIContent(label), g));
                     } else {
-                        var c = EditorGUILayout.ColorField(new GUIContent(label), ParseColor(text, slot?.color ?? Color.white), true, false, false);
-                        value = Hex(c);
+                        var c = EditorGUILayout.ColorField(new GUIContent(label), WardrobeConfigs.Color(text, slot?.color ?? Color.white), true, false, false);
+                        value = WardrobeConfigs.Hex(c);
                     }
                     bool canGradient = slot == null || slot.canGradient;
                     using (new EditorGUI.DisabledScope(!canGradient && !gradient))
                         if (GUILayout.Button(new GUIContent(gradient ? "Flat" : "Gradient", gradient ? "Make it one colour" : "Make it a gradient along the garment"),
                                 EditorStyles.miniButton, GUILayout.Width(60))) {
-                            var c = ParseColor(text.Split(',')[0].Split('@')[0], slot?.color ?? Color.white);
-                            value = gradient ? Hex(c) : $"{Hex(c)}@0, {Hex(c)}@1";
+                            var c = WardrobeConfigs.Color(text.Split(',')[0].Split('@')[0], slot?.color ?? Color.white);
+                            value = gradient ? WardrobeConfigs.Hex(c) : $"{WardrobeConfigs.Hex(c)}@0, {WardrobeConfigs.Hex(c)}@1";
                             GUI.changed = true;
                         }
                     if (EditorGUI.EndChangeCheck() && value != text) {
-                        while (colors.Count <= i) colors.Add(Hex(slot?.color ?? Color.white));
+                        while (colors.Count <= i) colors.Add(WardrobeConfigs.Hex(slot?.color ?? Color.white));
                         colors[i] = value;
-                        Set(o, key, colors, false, order);
+                        Set(o, key, colors, false);
                     }
                 }
             }
@@ -195,13 +186,11 @@ namespace RosDen.Wardrobe.Editor {
 
     /// <summary>Edits one .ravt: an avatar base, and how Ros' Wardrobe recognises it in a scene.</summary>
     internal class WardrobeAvatarForm : WardrobeJsonForm {
-        private static readonly string[] AvatarOrder = { "format", "id", "name", "version", "author", "description", "matches", "guids" };
 
-        public WardrobeAvatarForm(string path) : base(path, WardrobeMigrations.Kind.Avatar) { }
+        public WardrobeAvatarForm(string path) : base(path) { }
 
-        protected override string[] Order => AvatarOrder;
 
-        protected override ICollection<string> Always => new[] { "format", "id", "name", "version", "author" };
+        protected override ICollection<string> Always => new[] { "id", "name", "version", "author" };
 
         protected override void DrawJson(JsonObject j) {
             Header("Avatar");
@@ -256,18 +245,13 @@ namespace RosDen.Wardrobe.Editor {
 
     /// <summary>Edits one .rmat: a material type, and which of a garment's maps go into which texture property.</summary>
     internal class WardrobeMaterialForm : WardrobeJsonForm {
-        private static readonly string[] MaterialOrder = {
-            "format", "id", "name", "version", "author", "description", "shader", "template", "textures", "floats", "colors", "keywords", "garments",
-        };
-        private static readonly string[] TextureOrder = { "property", "channels", "alsoOn", "keyword" };
         private static readonly string[] Holds = { "The look's albedo", "The normal map", "Channels" };
         private static readonly string[] ChannelNames = { "R", "G", "B", "A" };
 
-        public WardrobeMaterialForm(string path) : base(path, WardrobeMigrations.Kind.Material) { }
+        public WardrobeMaterialForm(string path) : base(path) { }
 
-        protected override string[] Order => MaterialOrder;
 
-        protected override ICollection<string> Always => new[] { "format", "id", "name", "version", "author", "description", "textures" };
+        protected override ICollection<string> Always => new[] { "id", "name", "version", "author", "description", "textures" };
 
         private WardrobeMaterialType _type;
         private string _typeText;
@@ -310,8 +294,8 @@ namespace RosDen.Wardrobe.Editor {
                     using (new EditorGUILayout.HorizontalScope()) {
                         EditorGUI.BeginChangeCheck();
                         string property = Suggest(new GUIContent("Property"), t.String("property"), Properties(used, ShaderPropertyType.Texture),
-                            v => Set(t, "property", v, false, TextureOrder));
-                        if (EditorGUI.EndChangeCheck()) Set(t, "property", property, false, TextureOrder);
+                            v => Set(t, "property", v, false));
+                        if (EditorGUI.EndChangeCheck()) Set(t, "property", property, false);
                         if (GUILayout.Button(new GUIContent("✕", "Remove"), EditorStyles.miniButton, GUILayout.Width(22))) {
                             textures.RemoveAt(i);
                             GUIUtility.ExitGUI();
@@ -320,8 +304,8 @@ namespace RosDen.Wardrobe.Editor {
                     if (used != null && t.String("property").Length > 0 && used.FindPropertyIndex(t.String("property")) < 0)
                         EditorGUILayout.HelpBox($"{used.name} has no property {t.String("property")}.", MessageType.Warning);
                     DrawChannels(t);
-                    Words(t, "alsoOn", "Also On", "More texture properties that get the same texture", TextureOrder);
-                    Text(t, "keyword", "Keyword", "A shader keyword turned on with the texture (e.g. _NORMALMAP)", TextureOrder);
+                    Words(t, "alsoOn", "Also On", "More texture properties that get the same texture");
+                    Text(t, "keyword", "Keyword", "A shader keyword turned on with the texture (e.g. _NORMALMAP)");
                 }
             }
             if (GUILayout.Button("Add Texture", GUILayout.Width(160))) {
@@ -354,12 +338,12 @@ namespace RosDen.Wardrobe.Editor {
             EditorGUI.BeginChangeCheck();
             holds = EditorGUILayout.Popup(new GUIContent("Holds"), holds, Holds);
             if (EditorGUI.EndChangeCheck()) {
-                Set(t, "channels", holds == 0 ? "albedo" : holds == 1 ? "normal" : (object)Channels("metalness", "roughness", "occlusion", "sheen"), false, TextureOrder);
+                Set(t, "channels", holds == 0 ? "albedo" : holds == 1 ? "normal" : (object)Channels("metalness", "roughness", "occlusion", "sheen"), false);
                 return;
             }
             if (holds != 2) return;
             var list = channels as List<object> ?? new List<object>();
-            while (list.Count < 4) list.Add(new JsonNumber(list.Count == 3 ? 1 : 0));
+            while (list.Count < 4) list.Add(list.Count == 3 ? 1.0 : 0.0);
             EditorGUI.indentLevel++;
             for (int c = 0; c < 4; c++) {
                 object v = list[c];
@@ -370,15 +354,15 @@ namespace RosDen.Wardrobe.Editor {
                     EditorGUI.BeginChangeCheck();
                     int picked = EditorGUILayout.Popup(ChannelNames[c], index, WardrobeMaterialType.SourceNames);
                     if (EditorGUI.EndChangeCheck()) {
-                        list[c] = picked == 0 ? (object)new JsonNumber(c == 3 ? 1 : 0) : WardrobeMaterialType.SourceNames[picked];
-                        Set(t, "channels", list, false, TextureOrder);
+                        list[c] = picked == 0 ? (object)(c == 3 ? 1.0 : 0.0) : WardrobeMaterialType.SourceNames[picked];
+                        Set(t, "channels", list, false);
                     }
                     if (index == 0) {
                         EditorGUI.BeginChangeCheck();
-                        float value = EditorGUILayout.Slider(v is JsonNumber n ? (float)n.Value : 0, 0, 1, GUILayout.Width(140));
+                        float value = EditorGUILayout.Slider(v is double n ? (float)n : 0, 0, 1, GUILayout.Width(140));
                         if (EditorGUI.EndChangeCheck()) {
-                            list[c] = new JsonNumber(Math.Round(value, 3));
-                            Set(t, "channels", list, false, TextureOrder);
+                            list[c] = Math.Round(value, 3);
+                            Set(t, "channels", list, false);
                         }
                     }
                 }
@@ -396,11 +380,11 @@ namespace RosDen.Wardrobe.Editor {
                 using (new EditorGUILayout.HorizontalScope()) {
                     EditorGUI.BeginChangeCheck();
                     if (kind == ShaderPropertyType.Color) {
-                        var c = EditorGUILayout.ColorField(new GUIContent(name), ParseColor(values.Values[i] as string, Color.white), true, true, false);
-                        if (EditorGUI.EndChangeCheck()) values.Values[i] = c.a < 1 ? "#" + ColorUtility.ToHtmlStringRGBA(c) : Hex(c);
+                        var c = EditorGUILayout.ColorField(new GUIContent(name), WardrobeConfigs.Color(values.Values[i] as string, Color.white), true, true, false);
+                        if (EditorGUI.EndChangeCheck()) values.Values[i] = c.a < 1 ? "#" + ColorUtility.ToHtmlStringRGBA(c) : WardrobeConfigs.Hex(c);
                     } else {
-                        float f = EditorGUILayout.FloatField(name, values.Values[i] is JsonNumber n ? (float)n.Value : 0);
-                        if (EditorGUI.EndChangeCheck()) values.Values[i] = new JsonNumber(Math.Round(f, 4));
+                        float f = EditorGUILayout.FloatField(name, values.Values[i] is double n ? (float)n : 0);
+                        if (EditorGUI.EndChangeCheck()) values.Values[i] = Math.Round(f, 4);
                     }
                     if (GUILayout.Button(new GUIContent("✕", "Remove"), EditorStyles.miniButton, GUILayout.Width(22))) {
                         values.Remove(name);
@@ -411,10 +395,10 @@ namespace RosDen.Wardrobe.Editor {
             }
             if (GUILayout.Button($"Add {label.TrimEnd('s')}…", EditorStyles.miniButton, GUILayout.Width(120))) {
                 var menu = new GenericMenu();
-                foreach (var (property, text) in Properties(shader, kind).Where(p => !values.Has(p.Item1))) {
+                foreach (var (property, text) in Properties(shader, kind).Where(p => !values.Keys.Contains(p.Item1))) {
                     string picked = property;
                     menu.AddItem(new GUIContent(text), false, () => {
-                        values[picked] = kind == ShaderPropertyType.Color ? (object)"#FFFFFF" : new JsonNumber(Default(shader, picked));
+                        values[picked] = kind == ShaderPropertyType.Color ? (object)"#FFFFFF" : Default(shader, picked);
                         Set(j, key, values, false);
                         repaint?.Invoke();
                     });

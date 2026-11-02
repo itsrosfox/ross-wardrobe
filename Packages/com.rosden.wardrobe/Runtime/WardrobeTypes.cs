@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 namespace RosDen.Wardrobe {
     /// <summary>Real-world size of one ID map part's UVs, so patterns tile at the same size on every part.</summary>
@@ -31,17 +30,6 @@ namespace RosDen.Wardrobe {
         public MapChannel() { }
 
         public MapChannel(float value) => this.value = value;
-    }
-
-    /// <summary>Garments made before .rgarm files kept their PBR maps here; converting them reads it.</summary>
-    [Serializable]
-    public class PbrSource {
-        public Texture2D normalMap;
-        public Texture2D packedMap;
-        public TextureChannel metallic = TextureChannel.R;
-        public TextureChannel roughness = TextureChannel.G;
-        public bool smoothness;
-        public TextureChannel occlusion = TextureChannel.B;
     }
 
     /// <summary>A named group of parts (ID map colours) that is recoloured together, e.g. "Body" or "Collar".</summary>
@@ -78,25 +66,20 @@ namespace RosDen.Wardrobe {
     }
 
     /// <summary>
-    /// How one region looks: a pattern (by its .rpat id; empty for wardrobe.json's default) in colours of the look's
+    /// How one region looks: a pattern (by its .rpat id; empty for the default pattern) in colours of the look's
     /// choosing. Slots the look hasn't set use the pattern's own colours.
     /// </summary>
     [Serializable]
-    public class RegionStyle : ISerializationCallbackReceiver {
+    public class RegionStyle {
         public string region;
         [Tooltip("Id of the region's pattern (from its .rpat); empty = the default pattern")]
         public string pattern = "";
         [Tooltip("The pattern's colour slots, in its order")]
         public List<SlotColor> colors = new List<SlotColor>();
-        [Tooltip("Bigger = bigger pattern"), FormerlySerializedAs("fabricScale")]
+        [Tooltip("Bigger = bigger pattern")]
         public float scale = 1f;
-        [Tooltip("Turn the pattern 90°"), FormerlySerializedAs("fabricRotate")]
+        [Tooltip("Turn the pattern 90°")]
         public bool rotate;
-
-        // Looks saved before patterns: their colour or gradient goes on the default pattern.
-        [SerializeField, HideInInspector, FormerlySerializedAs("mode")] private int legacyMode;
-        [SerializeField, HideInInspector, FormerlySerializedAs("color")] private Color legacyColor = Color.white;
-        [SerializeField, HideInInspector, FormerlySerializedAs("gradient")] private Gradient legacyGradient;
 
         /// <summary>Slot <paramref name="i"/> as the look set it, or null to use the pattern's own.</summary>
         public SlotColor Slot(int i) => colors != null && i >= 0 && i < colors.Count ? colors[i] : null;
@@ -105,15 +88,6 @@ namespace RosDen.Wardrobe {
             region = region, pattern = pattern, scale = scale, rotate = rotate,
             colors = (colors ?? new List<SlotColor>()).Select(c => c?.Clone()).ToList(),
         };
-
-        void ISerializationCallbackReceiver.OnBeforeSerialize() { }
-
-        void ISerializationCallbackReceiver.OnAfterDeserialize() {
-            if (legacyMode == 0) return;
-            pattern = "";
-            colors = new List<SlotColor> { new SlotColor { color = legacyColor, useGradient = legacyMode == 2, gradient = legacyGradient } };
-            legacyMode = 0;
-        }
     }
 
     /// <summary>A full recolour: one style per region (regions without one are the default pattern in the garment's own colour).</summary>
@@ -122,15 +96,6 @@ namespace RosDen.Wardrobe {
         public List<RegionStyle> styles = new List<RegionStyle>();
 
         public RegionStyle Get(string region) => styles.Find(s => s.region == region);
-
-        public RegionStyle GetOrAdd(string region) {
-            var s = Get(region);
-            if (s == null) {
-                s = new RegionStyle { region = region };
-                styles.Add(s);
-            }
-            return s;
-        }
 
         public WardrobeLook Clone() {
             var l = new WardrobeLook();

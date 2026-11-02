@@ -119,9 +119,6 @@ namespace RosDen.Wardrobe.Editor {
 
         public static bool Same(Color32 a, Color32 b) => a.r == b.r && a.g == b.g && a.b == b.b;
 
-        /// <summary>Where baked textures/materials (and saved presets) go: see <see cref="WardrobeMaterialTypes.OutputFolder"/>.</summary>
-        public static string OutputFolder(WardrobeGarment g) => WardrobeMaterialTypes.OutputFolder(g);
-
         // ---------------------------------------------------------------- ID map
 
         /// <summary>The flat colours ("parts") of the garment's ID map, biggest first.</summary>
@@ -209,20 +206,7 @@ namespace RosDen.Wardrobe.Editor {
             var regionOf = new byte[id.part.Length];
             for (int i = 0; i < regionOf.Length; i++) regionOf[i] = partToRegion[id.part[i]];
 
-            var regionTex = new Texture2D(id.width, id.height, TextureFormat.R8, false, true) {
-                name = "Wardrobe Regions", hideFlags = HideFlags.HideAndDontSave,
-                filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp,
-            };
-            regionTex.SetPixelData(regionOf, 0);
-            regionTex.Apply(false, false);
-
-            // Part per texel and each part's real-world UV size, so fabrics tile at the same size on every part.
-            var partTex = new Texture2D(id.width, id.height, TextureFormat.R8, false, true) {
-                name = "Wardrobe Parts", hideFlags = HideFlags.HideAndDontSave,
-                filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp,
-            };
-            partTex.SetPixelData(id.part, 0);
-            partTex.Apply(false, false);
+            // Each part's real-world UV size, so fabrics tile at the same size on every part.
             var partScale = new float[256];
             float fallback = g.metresPerUv > 0 ? g.metresPerUv : 1f;
             for (int i = 0; i < partScale.Length; i++) partScale[i] = fallback;
@@ -232,11 +216,21 @@ namespace RosDen.Wardrobe.Editor {
             }
 
             p = new Prepared {
-                key = key, regionTex = regionTex, partTex = partTex, partScale = partScale,
+                key = key, regionTex = ByteTexture("Wardrobe Regions", id, regionOf), partTex = ByteTexture("Wardrobe Parts", id, id.part),
+                partScale = partScale, baseColor = BaseColors(g.baseColor, regionOf, id.width, id.height),
             };
-            p.baseColor = BaseColors(g.baseColor, regionOf, id.width, id.height);
             PrepCache[instance] = p;
             return p;
+        }
+
+        // A byte per texel of the ID map (region or part), point-sampled by the bake shader.
+        private static Texture2D ByteTexture(string name, IdData id, byte[] data) {
+            var tex = new Texture2D(id.width, id.height, TextureFormat.R8, false, true) {
+                name = name, hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp,
+            };
+            tex.SetPixelData(data, 0);
+            tex.Apply(false, false);
+            return tex;
         }
 
         private static string RegionsKey(WardrobeGarment g) {
@@ -303,8 +297,8 @@ namespace RosDen.Wardrobe.Editor {
             }
         }
 
-        /// <summary>Renders the look into <paramref name="rt"/>, over the garment's base texture or <paramref name="source"/> (for its alpha and untouched texels).</summary>
-        public static void Render(WardrobeGarment g, WardrobeLook look, RenderTexture rt, Texture source = null) {
+        // Binds the garment's regions and parts and the look's colours on the bake material.
+        private static Material Setup(WardrobeGarment g, WardrobeLook look) {
             var p = Prepare(g);
             var material = BakeMaterial;
             FillSlots(g, look);
@@ -313,6 +307,12 @@ namespace RosDen.Wardrobe.Editor {
             material.SetTexture("_SlotAtlas", Atlas);
             material.SetTexture("_PartTex", p.partTex);
             material.SetFloatArray("_PartScale", p.partScale);
+            return material;
+        }
+
+        /// <summary>Renders the look into <paramref name="rt"/>, over the garment's base texture or <paramref name="source"/> (for its alpha and untouched texels).</summary>
+        public static void Render(WardrobeGarment g, WardrobeLook look, RenderTexture rt, Texture source = null) {
+            var material = Setup(g, look);
             Blit(source != null ? source : g.baseColor, rt, null);
             foreach (var layer in LayersOf(g, look)) {
                 Bind(material, g, look, layer);
@@ -345,13 +345,7 @@ namespace RosDen.Wardrobe.Editor {
         public static bool RenderNormal(WardrobeGarment g, WardrobeLook look, RenderTexture rt, Texture garmentNormal) {
             var layers = LayersOf(g, look).Where(l => l.maps.normal != null || l.maps.height != null).ToList();
             if (layers.Count == 0) return false;
-            var scratch = RenderTexture.GetTemporary(4, 4);
-            try {
-                Render(g, look, scratch); // binds the region/part data on the material
-            } finally {
-                RenderTexture.ReleaseTemporary(scratch);
-            }
-            var material = BakeMaterial;
+            var material = Setup(g, look);
             Blit(garmentNormal != null ? garmentNormal : Texture2D.normalTexture, rt, material, 1);
             foreach (var layer in layers) {
                 Bind(material, g, look, layer);
@@ -407,14 +401,8 @@ namespace RosDen.Wardrobe.Editor {
         public static bool RenderSurface(WardrobeGarment g, WardrobeLook look, RenderTexture rt) {
             var layers = LayersOf(g, look).Where(l => l.maps.surface != null || l.maps.occlusion != null).ToList();
             if (layers.Count == 0) return false;
-            var scratch = RenderTexture.GetTemporary(4, 4);
-            try {
-                Render(g, look, scratch); // binds the region/part data on the material
-            } finally {
-                RenderTexture.ReleaseTemporary(scratch);
-            }
             FillGarmentSurface(g, rt);
-            var material = BakeMaterial;
+            var material = Setup(g, look);
             foreach (var layer in layers) {
                 Bind(material, g, look, layer);
                 FabricPass(rt, material, 3);
@@ -432,21 +420,26 @@ namespace RosDen.Wardrobe.Editor {
             return rt;
         }
 
-        internal static void FillGarmentSurface(WardrobeGarment g, RenderTexture rt) {
+        private static void FillGarmentSurface(WardrobeGarment g, RenderTexture rt) {
             var maps = new[] { g.metalness, g.roughness, g.occlusion, g.sheen };
             var fallbacks = new[] { 0f, 0.8f, 1f, 0.2f };
-            var material = BakeMaterial;
-            var channel = Vector4.zero;
-            var invert = Vector4.zero;
-            var value = Vector4.zero;
+            var textures = new Texture[4];
+            Vector4 channel = default, invert = default, value = default;
             for (int c = 0; c < 4; c++) {
                 var m = maps[c];
                 bool texture = m != null && m.texture != null && m.channel != TextureChannel.None;
-                material.SetTexture("_Pack" + c, texture ? (Texture)m.texture : Texture2D.whiteTexture);
+                textures[c] = texture ? m.texture : null;
                 channel[c] = texture ? (int)m.channel : -1;
                 invert[c] = texture && m.invert ? 1 : 0;
                 value[c] = m != null ? m.value : fallbacks[c];
             }
+            PackPass(textures, channel, invert, value, rt);
+        }
+
+        // Each channel of rt from a channel of its texture (-1: the value instead), inverted where asked.
+        private static void PackPass(Texture[] textures, Vector4 channel, Vector4 invert, Vector4 value, RenderTexture rt) {
+            var material = BakeMaterial;
+            for (int c = 0; c < 4; c++) material.SetTexture("_Pack" + c, textures[c] != null ? textures[c] : Texture2D.whiteTexture);
             material.SetVector("_PackChannel", channel);
             material.SetVector("_PackInvert", invert);
             material.SetVector("_PackValue", value);
@@ -458,10 +451,8 @@ namespace RosDen.Wardrobe.Editor {
         /// garment's), the garment's opacity, or the surface map (R metalness, G roughness, B occlusion, A sheen).
         /// </summary>
         public static void Pack(WardrobeGarment g, WardrobeMaterialType.Output output, Texture albedo, Texture surface, RenderTexture rt) {
-            var material = BakeMaterial;
-            var channel = Vector4.zero;
-            var invert = Vector4.zero;
-            var value = Vector4.zero;
+            var textures = new Texture[4];
+            Vector4 channel = default, invert = default, value = default;
             for (int c = 0; c < 4; c++) {
                 var source = output.albedo ? (c < 3 ? WardrobeMaterialType.Source.AlbedoR + c : WardrobeMaterialType.Source.Opacity) : output.channels[c];
                 Texture texture = null;
@@ -490,16 +481,12 @@ namespace RosDen.Wardrobe.Editor {
                     case WardrobeMaterialType.Source.Occlusion: texture = surface; pick = 2; break;
                     case WardrobeMaterialType.Source.Sheen: texture = surface; pick = 3; break;
                 }
-                if (texture == null) pick = -1;
-                material.SetTexture("_Pack" + c, texture != null ? texture : Texture2D.whiteTexture);
-                channel[c] = pick;
+                textures[c] = texture;
+                channel[c] = texture != null ? pick : -1;
                 invert[c] = flip ? 1 : 0;
                 value[c] = output.albedo ? 1 : output.values[c];
             }
-            material.SetVector("_PackChannel", channel);
-            material.SetVector("_PackInvert", invert);
-            material.SetVector("_PackValue", value);
-            Blit(Texture2D.whiteTexture, rt, material, 4);
+            PackPass(textures, channel, invert, value, rt);
         }
 
         /// <summary>The look's surface map at preview size, or null when no pattern it uses has surface or occlusion maps.</summary>
@@ -631,7 +618,7 @@ namespace RosDen.Wardrobe.Editor {
             var type = MaterialType(rc);
             var start = WardrobeMaterialTypes.BaseMaterial(g, type);
 
-            string folder = OutputFolder(g);
+            string folder = WardrobeMaterialTypes.OutputFolder(g);
             WardrobeAssets.EnsureFolder(folder);
             string look = string.IsNullOrWhiteSpace(rc.lookName) ? "Custom" : rc.lookName.Trim();
             bool isDefault = WardrobeMaterialTypes.For(g).FirstOrDefault() == type;
@@ -669,11 +656,8 @@ namespace RosDen.Wardrobe.Editor {
                     } else {
                         if (!output.UsesAlbedo && !(output.UsesSurface && surfaceLook)) continue;
                         if (output.UsesSurface && surface == null) {
-                            var size = SourceSize(g.baseColor);
-                            surface = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear) {
-                                hideFlags = HideFlags.HideAndDontSave,
-                            };
-                            if (!RenderSurface(g, rc.look, surface)) FillGarmentSurface(g, surface);
+                            surface = GarmentSurface(g);
+                            RenderSurface(g, rc.look, surface);
                         }
                         texture = WardrobeMaterialTypes.WritePacked(g, $"{folder}/{name} {output.property.TrimStart('_')}.png", output, albedo, surface);
                     }
@@ -711,7 +695,7 @@ namespace RosDen.Wardrobe.Editor {
             });
         }
 
-        /// <summary>The material type the component uses: the garment's type of that id (or name), else its default; null when none fits.</summary>
+        /// <summary>The material type the component uses: the garment's type of that id, else its default; null when none fits.</summary>
         public static WardrobeMaterialType MaterialType(WardrobeRecolor rc) =>
             rc.garment != null ? WardrobeMaterialTypes.For(rc.garment, rc.materialType) : null;
 

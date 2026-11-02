@@ -21,8 +21,8 @@ from any creator can show up in the same window.
 - **Gradients.** Any colour that allows it can be a gradient along the garment instead (top to bottom, sleeve to
   sleeve…).
 - **Save your own.** Keep a look as a preset, and use it on any garment it fits.
-- **Body and skin** (for avatar bases that describe them): shape the body with the base's sliders and recolour the
-  fur, and every garment follows the body's shape.
+- **Body** (for avatar bases that describe it): shape the body with the base's sliders, and every garment follows
+  the body's shape.
 - **Nothing to apply, nothing in your upload.** Changes are baked as you go into
   `Assets/Wardrobe Recolors/<Avatar>/<Garment>`, outside the garment's own files. The only part of Ros' Wardrobe
   that can end up in an upload is the small double-sided shader of the PBR material.
@@ -50,7 +50,7 @@ Ros' Wardrobe needs Unity 2022.3, the version VRChat uses.
 3. Click a **Look**, then one of its colourways. Or open **Custom** and choose a pattern and colours for each part.
 4. That's it. Upload as usual.
 
-The full guide, with the Avatar section (body sliders and skins), presets and where everything is saved:
+The full guide, with the Avatar section (body sliders), presets and where everything is saved:
 [Using Ros' Wardrobe](docs/using-ros-wardrobe.md).
 
 ## For creators
@@ -60,7 +60,7 @@ That means you can:
 
 - **make garments** for any avatar base and ship them with recolouring built in,
 - **add patterns and looks** to your own garments, or to someone else's,
-- **describe an avatar base** (its body sliders, toggles and fur), so the Avatar section can shape and recolour it,
+- **describe an avatar base** (its body sliders and toggles), so the Avatar section can shape it,
 - **add material types** for the shader you use (Poiyomi, lilToon, Standard…).
 
 Start with the guides:
@@ -68,7 +68,7 @@ Start with the guides:
 | Guide | What it covers |
 | --- | --- |
 | [Making a garment](docs/making-a-garment.md) | From a skinned mesh to a recolourable garment pack, step by step |
-| [Adding an avatar base](docs/adding-an-avatar-base.md) | The `.ravt` that tells Ros' Wardrobe which avatars a garment fits, plus body sliders and fur |
+| [Adding an avatar base](docs/adding-an-avatar-base.md) | The `.ravt` that tells Ros' Wardrobe which avatars a garment fits, plus body sliders |
 | [Patterns and looks](docs/patterns-and-looks.md) | Tiling, hybrid and complete patterns, Marvelous Designer fabrics, presets and colourways |
 | [Material types](docs/material-types.md) | Making looks bake into your shader's material |
 | [File reference](docs/file-reference.md) | Every field of every config file |

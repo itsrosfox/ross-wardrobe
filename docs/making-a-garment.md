@@ -90,18 +90,18 @@ This prefab is what Ros' Wardrobe puts on the avatar when a buyer clicks the gar
 
 Ros' Wardrobe only lists a garment for avatars built on the base it was fitted to. A `.ravt` file describes that
 base. If your pack is for a base no one has described yet, make one now: see
-[Adding an avatar base](adding-an-avatar-base.md). It takes a minute, and it's also where body sliders and fur
-recolouring are set up.
+[Adding an avatar base](adding-an-avatar-base.md). It takes a minute, and it's also where body sliders are set
+up.
 
 Ship the `.ravt` in your pack (in `<Pack>/Avatars`). Several packs shipping the same `.ravt` is fine: they share
 the id.
 
 ## 5. Create the `.rgarm`
 
-1. Open **Edit → Project Settings → Ros' Wardrobe**, tab **Garments**, and click **New Garment…**.
-2. Drop your **Prefab** in first. That fills in the mesh, base colour, normal map and name, and puts the file
-   next to the prefab.
-3. Fill in the rest:
+1. In the garment's folder, pick **Assets → Create → Ros' Wardrobe → Garment** and name the file.
+2. Select it: the Inspector is its editor. Set the **Prefab**, and under **Maps** the **Mesh**, **Base Colour** and
+   **Normal**.
+3. Fill in the rest, then click **Save**:
    - **Name**: what buyers see.
    - **Id**: a stable id like `yourname.hoodie`. Patterns and looks refer to the garment by it, so **never
      change it once shipped**. Fits of the same garment for other avatars use the **same id**.
@@ -186,8 +186,7 @@ Looks are what make the garment fun to open: ready-made outfits buyers click thr
 1. With the garment on, make a look in the window.
 2. Click **Save as Preset…**, and move the `.rpre` next to the garment (or into the pattern's folder) so it ships
    with the pack.
-3. To add colourways (the same look in other colours), open the `.rpre` in
-   *Project Settings → Ros' Wardrobe → Presets*.
+3. To add colourways (the same look in other colours), select the `.rpre` and add them in the Inspector.
 
 Patterns made for your garment (stripes, colour blocks, prints) are covered in
 [Patterns and looks](patterns-and-looks.md).
@@ -215,5 +214,3 @@ UVs, so they need maps per fit.
 
 - Bump **Version**. If the UVs changed, bump the major version (1.x → 2.0) and update the patterns that list it.
 - Keep the **id** and the region names, so buyers' looks still apply.
-- After a Ros' Wardrobe update, *Project Settings → Ros' Wardrobe → Updates* rewrites older files in the current
-  format. It backs up the originals first.

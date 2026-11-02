@@ -16,6 +16,15 @@ namespace RosDen.Wardrobe.Editor {
     /// </summary>
     public static class WardrobeFabricImporter {
         private const int MaxSize = 1024;
+        private const float TileWidth = 100;   // millimetres; the height follows the fabric's aspect
+
+        // How much sheen a new pattern starts with, by words in the fabric's name.
+        private static readonly (string[] words, float sheen)[] Sheen = {
+            (new[] { "velvet", "velour", "plush", "fleece" }, 0.9f),
+            (new[] { "corduroy", "cord" }, 0.7f),
+            (new[] { "flannel", "melton", "boiled", "wool", "felt" }, 0.45f),
+            (new[] { "knit", "jersey", "rib", "waffle", "pique", "tricot", "pointelle", "quilted", "dobby" }, 0.3f),
+        };
 
         [MenuItem("Assets/Ros' Wardrobe/Import Marvelous Designer Fabric…")]
         private static void ImportFromMenu() {
@@ -61,8 +70,7 @@ namespace RosDen.Wardrobe.Editor {
             try {
                 bool hasNormal = normalEntry.Key != null && normalSource.LoadImage(normalEntry.Value);
                 int w = hasNormal ? normalSource.width : MaxSize, h = hasNormal ? normalSource.height : MaxSize;
-                var (surfaceData, _) = Surface(images, w, h);
-                WriteTexture($"{dir}/{name}_Surface.png", Encode(surfaceData, w, h, TextureFormat.RGBA32), linear: true);
+                WriteTexture($"{dir}/{name}_Surface.png", Encode(Surface(images, w, h), w, h));
                 string normalFile = null;
                 if (hasNormal) {
                     normalFile = $"{name}_Normal{Path.GetExtension(normalEntry.Key).ToLowerInvariant()}";
@@ -73,22 +81,19 @@ namespace RosDen.Wardrobe.Editor {
                         ti.anisoLevel = 4;
                     });
                 }
-                // files earlier versions of the importer wrote
-                foreach (string old in new[] { ".asset", "_Gray.png", "_Mask.png", "_Mask2.png", "_ID.png", "_Detail.png", "_Preview.png" })
-                    if (File.Exists($"{dir}/{name}{old}")) AssetDatabase.DeleteAsset($"{dir}/{name}{old}");
 
                 string jsonPath = Directory.GetFiles(dir, "*" + WardrobeConfigs.Pattern).Select(p => p.Replace('\\', '/')).FirstOrDefault() ??
                                   $"{dir}/{name}{WardrobeConfigs.Pattern}";
                 WardrobePatterns.Json json = null;
                 if (File.Exists(jsonPath))
-                    try { json = JsonUtility.FromJson<WardrobePatterns.Json>(WardrobeMigrations.Read(jsonPath, WardrobeMigrations.Kind.Pattern)); } catch (Exception) { }
-                var defaults = WardrobeSettings.Current.importedFabric;   // from wardrobe.json
+                    try { json = JsonUtility.FromJson<WardrobePatterns.Json>(File.ReadAllText(jsonPath)); } catch (Exception) { }
                 if (json == null)
                     json = new WardrobePatterns.Json {
-                        id = defaults.idPrefix + Regex.Replace(displayName.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-'),
-                        version = "1.0.0", name = displayName, group = defaults.group,
-                        tileSize = new[] { defaults.tileWidth, defaults.tileWidth * h / w }, sheen = WardrobeSettings.SheenFor(displayName),
-                        colors = new[] { new WardrobePatterns.SlotJson { name = defaults.colorName, color = defaults.color, canGradient = true } },
+                        id = "imported." + Regex.Replace(displayName.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-'),
+                        version = "1.0.0", name = displayName, group = "Weaves",
+                        tileSize = new[] { TileWidth, TileWidth * h / w },
+                        sheen = Sheen.FirstOrDefault(r => r.words.Any(word => Has(displayName, word))).sheen is float sheen && sheen > 0 ? sheen : 0.15f,
+                        colors = new[] { new WardrobePatterns.SlotJson { name = "Colour", color = "#F4F4F2", canGradient = true } },
                     };
                 json.normal = normalFile ?? "";
                 json.surface = $"{name}_Surface.png";
@@ -104,8 +109,8 @@ namespace RosDen.Wardrobe.Editor {
         // ---------------------------------------------------------------- surface
 
         // Surface: R metalness, G roughness, A opacity (from the fabric's MTL / ROUGH / ALPHA maps, resampled to the
-        // colour texture's size). Missing maps mean non-metal, roughness 0.8 (cloth) and opaque.
-        private static (byte[] data, bool holes) Surface(List<KeyValuePair<string, byte[]>> images, int w, int h) {
+        // normal map's size). Missing maps mean non-metal, roughness 0.8 (cloth) and opaque.
+        private static byte[] Surface(List<KeyValuePair<string, byte[]>> images, int w, int h) {
             Texture2D Load(string key) {
                 var entry = images.FirstOrDefault(e => Has(e.Key, key));
                 if (entry.Key == null) return null;
@@ -119,7 +124,6 @@ namespace RosDen.Wardrobe.Editor {
             var alpha = Load("_ALPHA");
             try {
                 var data = new byte[w * h * 4];
-                int open = 0;
                 for (int y = 0; y < h; y++) {
                     float v = (y + 0.5f) / h;
                     for (int x = 0; x < w; x++) {
@@ -128,10 +132,9 @@ namespace RosDen.Wardrobe.Editor {
                         data[o] = metal != null ? (byte)(metal.GetPixelBilinear(u, v).r * 255) : (byte)0;
                         data[o + 1] = rough != null ? (byte)(rough.GetPixelBilinear(u, v).r * 255) : (byte)204;
                         data[o + 3] = alpha != null ? (byte)(alpha.GetPixelBilinear(u, v).r * 255) : (byte)255;
-                        if (data[o + 3] < 128) open++;
                     }
                 }
-                return (data, open > w * h / 100);
+                return data;
             } finally {
                 if (metal != null) Object.DestroyImmediate(metal);
                 if (rough != null) Object.DestroyImmediate(rough);
@@ -141,8 +144,8 @@ namespace RosDen.Wardrobe.Editor {
 
         // ---------------------------------------------------------------- helpers
 
-        private static byte[] Encode(byte[] data, int w, int h, TextureFormat format) {
-            var tex = new Texture2D(w, h, format, false, true);
+        private static byte[] Encode(byte[] data, int w, int h) {
+            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false, true);
             try {
                 tex.SetPixelData(data, 0);
                 tex.Apply(false);
@@ -152,14 +155,10 @@ namespace RosDen.Wardrobe.Editor {
             }
         }
 
-        private static Texture2D WriteTexture(string path, byte[] png, bool linear, bool point = false) =>
+        private static Texture2D WriteTexture(string path, byte[] png) =>
             WardrobeAssets.WriteTexture(path, png, ti => {
                 ti.textureType = TextureImporterType.Default;
-                ti.sRGBTexture = !linear;
-                if (point) {
-                    ti.filterMode = FilterMode.Point;
-                    ti.mipmapEnabled = false;
-                }
+                ti.sRGBTexture = false;
                 ti.alphaSource = TextureImporterAlphaSource.FromInput;
                 ti.alphaIsTransparency = false;
                 ti.wrapMode = TextureWrapMode.Repeat;

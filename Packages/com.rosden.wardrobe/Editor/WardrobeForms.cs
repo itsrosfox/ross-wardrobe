@@ -1,17 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
 namespace RosDen.Wardrobe.Editor {
     /// <summary>
-    /// An editor for one Ros' Wardrobe file, shared by the file's inspector and Project Settings → Ros' Wardrobe. Changes
-    /// are kept until <see cref="Save"/>; a form that has none follows the file when it changes on disk.
+    /// The inspector's editor for one Ros' Wardrobe file. Changes are kept until <see cref="Save"/>; a form that has none
+    /// follows the file when it changes on disk.
     /// </summary>
     internal abstract class WardrobeForm {
         public readonly string path;
@@ -20,9 +18,6 @@ namespace RosDen.Wardrobe.Editor {
         protected WardrobeForm(string path) => this.path = path;
 
         public abstract bool Dirty { get; }
-
-        /// <summary>What the file is called in lists and dialogs.</summary>
-        public abstract string Name { get; }
 
         public abstract void Revert();
 
@@ -33,21 +28,20 @@ namespace RosDen.Wardrobe.Editor {
         public virtual void Dispose() { }
 
         public static WardrobeForm Open(string path) {
-            switch (WardrobeMigrations.KindOf(path)) {
-                case WardrobeMigrations.Kind.Garment: return new WardrobeGarmentForm(path);
-                case WardrobeMigrations.Kind.Pattern: return new WardrobePatternForm(path);
-                case WardrobeMigrations.Kind.Preset: return new WardrobePresetForm(path);
-                case WardrobeMigrations.Kind.Avatar: return new WardrobeAvatarForm(path);
-                case WardrobeMigrations.Kind.Material: return new WardrobeMaterialForm(path);
+            switch (Path.GetExtension(path).ToLowerInvariant()) {
+                case WardrobeConfigs.Garment: return new WardrobeGarmentForm(path);
+                case WardrobeConfigs.Pattern: return new WardrobePatternForm(path);
+                case WardrobeConfigs.Preset: return new WardrobePresetForm(path);
+                case WardrobeConfigs.Avatar: return new WardrobeAvatarForm(path);
+                case WardrobeConfigs.Material: return new WardrobeMaterialForm(path);
                 default: return null;
             }
         }
 
-        /// <summary>The Save / Revert row (with the name as a title when <paramref name="title"/>).</summary>
-        public void DrawToolbar(bool title) {
+        /// <summary>The Save / Revert row.</summary>
+        public void DrawToolbar() {
             using (new EditorGUILayout.HorizontalScope()) {
-                if (title) EditorGUILayout.LabelField(Name, EditorStyles.largeLabel);
-                else EditorGUILayout.LabelField(Dirty ? "Unsaved changes" : " ", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(Dirty ? "Unsaved changes" : " ", EditorStyles.miniLabel);
                 GUILayout.FlexibleSpace();
                 bool dirty = Dirty;
                 using (new EditorGUI.DisabledScope(!dirty)) {
@@ -61,15 +55,6 @@ namespace RosDen.Wardrobe.Editor {
                     }
                 }
             }
-        }
-
-        /// <summary>Before leaving the form: asks to save its changes. False = stay.</summary>
-        public bool ConfirmLeave() {
-            if (!Dirty) return true;
-            int choice = EditorUtility.DisplayDialogComplex("Ros' Wardrobe", $"Save your changes to {Name}?", "Save", "Cancel", "Discard");
-            if (choice == 1) return false;
-            if (choice == 0) Save();
-            return true;
         }
 
         // ---------------------------------------------------------------- shared fields
@@ -115,18 +100,6 @@ namespace RosDen.Wardrobe.Editor {
             return WardrobeAvatars.Get(id)?.DisplayName ?? id;
         }
 
-        protected static Color ParseColor(string hex, Color fallback) =>
-            !string.IsNullOrWhiteSpace(hex) && ColorUtility.TryParseHtmlString(hex.Trim(), out var c) ? c : fallback;
-
-        protected static string Hex(Color c) => "#" + ColorUtility.ToHtmlStringRGB(c);
-
-        /// <summary>A kebab-case id from a prefix and a name ("rosden", "Pin Stripe" → "rosden.pin-stripe").</summary>
-        public static string SuggestId(string prefix, string name) {
-            string Kebab(string s) => Regex.Replace((s ?? "").ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
-            string p = Kebab(prefix), n = Kebab(name);
-            return n.Length == 0 ? "" : p.Length == 0 ? n : $"{p}.{n}";
-        }
-
         // Heavy work after the GUI has finished drawing, with a progress bar.
         protected void Later(string label, Action action) {
             EditorApplication.delayCall += () => {
@@ -146,52 +119,30 @@ namespace RosDen.Wardrobe.Editor {
 
     /// <summary>
     /// A form over a file's json tree, so keys it doesn't show stay as they are. Keys set back to their default are
-    /// dropped (unless they're always written) and new ones go in the kind's usual order, so saved files look like
-    /// generated ones.
+    /// dropped, unless they're always written.
     /// </summary>
     internal abstract class WardrobeJsonForm : WardrobeForm {
-        protected static readonly string[] TargetOrder = { "garment", "avatar", "version" };
-
-        private readonly WardrobeMigrations.Kind _kind;
         protected JsonObject json;
-        private string _saved, _error, _upgradedFrom;
-        private bool _newer;
+        private string _saved, _error;
         private int _revision;
         protected readonly Dictionary<object, bool> open = new Dictionary<object, bool>();
 
-        protected WardrobeJsonForm(string path, WardrobeMigrations.Kind kind) : base(path) {
-            _kind = kind;
-            Revert();
-        }
-
-        /// <summary>The order keys are written in.</summary>
-        protected abstract string[] Order { get; }
+        protected WardrobeJsonForm(string path) : base(path) => Revert();
 
         /// <summary>Keys written even when empty.</summary>
-        protected virtual ICollection<string> Always => new[] { "format", "id", "version", "name", "author" };
+        protected virtual ICollection<string> Always => new[] { "id", "version", "name", "author" };
 
         protected abstract void DrawJson(JsonObject j);
 
         public override bool Dirty => json != null && WardrobeJson.Write(json) != _saved;
 
-        public override string Name => json?.String("name") is string n && n.Trim().Length > 0 ? n.Trim() : Path.GetFileNameWithoutExtension(path);
-
         public override void Revert() {
-            _error = _upgradedFrom = null;
-            _newer = false;
+            _error = null;
             _revision = WardrobeConfigs.Revision;
             open.Clear();
             try {
-                string text = File.ReadAllText(path);
-                json = WardrobeJson.Parse(text);
+                json = WardrobeJson.Parse(File.ReadAllText(path));
                 _saved = WardrobeJson.Write(json);
-                int format = WardrobeMigrations.FormatOf(text), current = WardrobeMigrations.Current(_kind);
-                _newer = format > current;
-                if (format < current) {
-                    // edited as the current format; saving writes it that way
-                    WardrobeMigrations.Upgrade(_kind, json, path);
-                    _upgradedFrom = format.ToString();
-                }
             } catch (Exception e) {
                 json = null;
                 _error = e.Message;
@@ -203,7 +154,6 @@ namespace RosDen.Wardrobe.Editor {
             string text = WardrobeJson.Write(json);
             File.WriteAllText(path, text);
             _saved = text;
-            _upgradedFrom = null;
             AssetDatabase.ImportAsset(path);
             _revision = WardrobeConfigs.Revision;
         }
@@ -219,85 +169,71 @@ namespace RosDen.Wardrobe.Editor {
                 if (GUILayout.Button("Read Again", GUILayout.Width(100))) Revert();
                 return;
             }
-            if (_newer) {
-                EditorGUILayout.HelpBox("This file was made with a newer Ros' Wardrobe, so it can't be edited here. Update Ros' Wardrobe through VCC.",
-                    MessageType.Warning);
-                return;
-            }
-            if (_upgradedFrom != null)
-                EditorGUILayout.HelpBox($"This file is in an older layout (format {_upgradedFrom}). It's shown updated; saving writes it that way.", MessageType.Info);
             DrawJson(json);
         }
 
         // ---------------------------------------------------------------- fields
 
         /// <summary>Sets a key (dropping it when it's back to its default, unless it's one that's always written).</summary>
-        protected void Set(JsonObject o, string key, object value, bool isDefault, string[] order = null) {
-            if (isDefault && (o != json || !Always.Contains(key))) {
-                o.Remove(key);
-                return;
-            }
-            o.Put(key, value, order ?? Order);
+        protected void Set(JsonObject o, string key, object value, bool isDefault) {
+            if (isDefault && (o != json || !Always.Contains(key))) o.Remove(key);
+            else o[key] = value;
         }
 
-        protected void Text(JsonObject o, string key, string label, string tooltip = null, string[] order = null) {
+        protected void Text(JsonObject o, string key, string label, string tooltip = null) {
             EditorGUI.BeginChangeCheck();
             string value = EditorGUILayout.TextField(new GUIContent(label, tooltip), o.String(key));
-            if (EditorGUI.EndChangeCheck()) Set(o, key, value, value.Length == 0, order);
+            if (EditorGUI.EndChangeCheck()) Set(o, key, value, value.Length == 0);
         }
 
-        protected void TextArea(JsonObject o, string key, string label, string tooltip = null, string[] order = null) {
+        protected void TextArea(JsonObject o, string key, string label, string tooltip = null) {
             EditorGUI.BeginChangeCheck();
             EditorGUILayout.PrefixLabel(new GUIContent(label, tooltip));
             string value = EditorGUILayout.TextArea(o.String(key), EditorStyles.textArea, GUILayout.MinHeight(36));
-            if (EditorGUI.EndChangeCheck()) Set(o, key, value, value.Length == 0, order);
+            if (EditorGUI.EndChangeCheck()) Set(o, key, value, value.Length == 0);
         }
 
-        protected void Toggle(JsonObject o, string key, string label, string tooltip = null, string[] order = null) {
+        protected void Toggle(JsonObject o, string key, string label, string tooltip = null) {
             EditorGUI.BeginChangeCheck();
             bool value = EditorGUILayout.Toggle(new GUIContent(label, tooltip), o.Bool(key));
-            if (EditorGUI.EndChangeCheck()) Set(o, key, value, !value, order);
+            if (EditorGUI.EndChangeCheck()) Set(o, key, value, !value);
         }
 
-        protected void Slider(JsonObject o, string key, string label, double fallback, float min, float max, string tooltip = null, string[] order = null) {
+        protected void Slider(JsonObject o, string key, string label, double fallback, float min, float max, string tooltip = null) {
             EditorGUI.BeginChangeCheck();
             float value = EditorGUILayout.Slider(new GUIContent(label, tooltip), (float)o.Number(key, fallback), min, max);
-            if (EditorGUI.EndChangeCheck()) {
-                value = (float)Math.Round(value, 3);
-                Set(o, key, new JsonNumber(value), Math.Abs(value - fallback) < 1e-6, order);
-            }
+            if (EditorGUI.EndChangeCheck()) Set(o, key, Math.Round(value, 3), Math.Abs(Math.Round(value, 3) - fallback) < 1e-6);
         }
 
-        protected void Integer(JsonObject o, string key, string label, int fallback, string tooltip = null, string[] order = null) {
+        protected void Integer(JsonObject o, string key, string label, int fallback, string tooltip = null) {
             EditorGUI.BeginChangeCheck();
             int value = EditorGUILayout.IntField(new GUIContent(label, tooltip), o.Int(key, fallback));
-            if (EditorGUI.EndChangeCheck()) Set(o, key, new JsonNumber(value), value == fallback, order);
+            if (EditorGUI.EndChangeCheck()) Set(o, key, (double)value, value == fallback);
         }
 
         /// <summary>A comma-separated list of strings.</summary>
-        protected void Words(JsonObject o, string key, string label, string tooltip = null, string[] order = null) {
+        protected void Words(JsonObject o, string key, string label, string tooltip = null) {
             var list = (o.Array(key) ?? new List<object>()).OfType<string>().ToList();
             EditorGUI.BeginChangeCheck();
             string value = EditorGUILayout.DelayedTextField(new GUIContent(label, (tooltip ?? "") + " (comma separated)"), string.Join(", ", list));
             if (EditorGUI.EndChangeCheck()) {
                 var words = value.Split(',').Select(w => w.Trim()).Where(w => w.Length > 0).Distinct().Cast<object>().ToList();
-                Set(o, key, words, words.Count == 0, order);
+                Set(o, key, words, words.Count == 0);
             }
         }
 
         /// <summary>An asset the file names by path (relative to it, or "path#sub-asset" for meshes in a model).</summary>
-        protected T Asset<T>(JsonObject o, string key, string label, string tooltip = null, string[] order = null) where T : Object {
+        protected T Asset<T>(JsonObject o, string key, string label, string tooltip = null) where T : Object {
             string relative = o.String(key);
             var asset = WardrobeConfigs.Load<T>(path, relative);
             EditorGUI.BeginChangeCheck();
             var picked = (T)EditorGUILayout.ObjectField(new GUIContent(label, tooltip), asset, typeof(T), false);
-            if (EditorGUI.EndChangeCheck()) Set(o, key, picked == null ? "" : WardrobeConfigs.Relative(path, picked), picked == null, order);
+            if (EditorGUI.EndChangeCheck()) Set(o, key, picked == null ? "" : WardrobeConfigs.Relative(path, picked), picked == null);
             if (relative.Length > 0 && asset == null) EditorGUILayout.HelpBox($"Can't find '{relative}'.", MessageType.Warning);
             return picked;
         }
 
-        protected Texture2D Texture(JsonObject o, string key, string label, string tooltip = null, string[] order = null) =>
-            Asset<Texture2D>(o, key, label, tooltip, order);
+        protected Texture2D Texture(JsonObject o, string key, string label, string tooltip = null) => Asset<Texture2D>(o, key, label, tooltip);
 
         /// <summary>The id field, with a warning when it's empty or another file of the kind has it.</summary>
         protected void Id(JsonObject o, string tooltip, IEnumerable<string> others) {
@@ -334,13 +270,13 @@ namespace RosDen.Wardrobe.Editor {
                     }
                     EditorGUI.BeginChangeCheck();
                     string garment = Suggest(new GUIContent("Garment Id", "The .rgarm id"), t.String("garment"), GarmentIds(),
-                        v => Set(t, "garment", v, false, TargetOrder));
-                    if (EditorGUI.EndChangeCheck()) Set(t, "garment", garment, false, TargetOrder);
+                        v => Set(t, "garment", v, false));
+                    if (EditorGUI.EndChangeCheck()) Set(t, "garment", garment, false);
                     EditorGUI.BeginChangeCheck();
                     string avatar = Suggest(new GUIContent("Avatar Id", "Only the garment's fit for this avatar base (.ravt id); empty = every fit"),
-                        t.String("avatar"), AvatarIds(target.garment), v => Set(t, "avatar", v, v.Length == 0, TargetOrder));
-                    if (EditorGUI.EndChangeCheck()) Set(t, "avatar", avatar, avatar.Length == 0, TargetOrder);
-                    Text(t, "version", "Version", "Which of the garment's versions: \"1\" = 1.x.x, \"1.2\" = 1.2.x, empty = any", TargetOrder);
+                        t.String("avatar"), AvatarIds(target.garment), v => Set(t, "avatar", v, v.Length == 0));
+                    if (EditorGUI.EndChangeCheck()) Set(t, "avatar", avatar, avatar.Length == 0);
+                    Text(t, "version", "Version", "Which of the garment's versions: \"1\" = 1.x.x, \"1.2\" = 1.2.x, empty = any");
                     if (string.IsNullOrWhiteSpace(target.garment)) { }
                     else if (any == null) EditorGUILayout.LabelField("No garment with this id in the project (fine if it ships separately).", EditorStyles.miniLabel);
                     else if (fits.Count == 0) EditorGUILayout.HelpBox("No fit of it in the project matches this avatar and version.", MessageType.Warning);
@@ -378,7 +314,5 @@ namespace RosDen.Wardrobe.Editor {
             Set(j, "garments", list, false);
             repaint?.Invoke();
         }
-
-        protected static string Number(double value) => value.ToString(CultureInfo.InvariantCulture);
     }
 }

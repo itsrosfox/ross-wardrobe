@@ -18,7 +18,9 @@ namespace RosDen.Wardrobe.Editor {
         public const int Size = 192;
         private const int MaxCached = 512;
         private const int PerBatch = 4;
-        private const int Version = 2;   // bump when the pictures change, so the disk cache isn't used
+        private const int Version = 3;   // bump when the pictures change, so the disk cache isn't used
+
+        public static readonly Color Background = new Color32(0x3D, 0x3D, 0x42, 255), Ambient = new Color32(0x73, 0x73, 0x7A, 255);
 
         private static readonly Dictionary<string, Texture2D> Cache = new Dictionary<string, Texture2D>();
         private static readonly Queue<string> Order = new Queue<string>();
@@ -52,20 +54,11 @@ namespace RosDen.Wardrobe.Editor {
         public static Texture2D RenderNow(WardrobeGarment g, WardrobeLook look, string materialType = null) =>
             CanRender(g, materialType) ? Render(g, look, materialType) : null;
 
-        /// <summary>Forgets the pictures in memory (the disk cache stays; <see cref="ClearDisk"/> empties it).</summary>
+        /// <summary>Forgets the pictures in memory (the disk cache stays).</summary>
         public static void Clear() {
             foreach (var texture in Cache.Values) if (texture != null) Object.DestroyImmediate(texture);
             Cache.Clear();
             Order.Clear();
-        }
-
-        public static void ClearDisk() {
-            Clear();
-            try {
-                if (Directory.Exists(CacheFolder)) Directory.Delete(CacheFolder, true);
-            } catch (IOException e) {
-                Debug.LogWarning($"[Ros' Wardrobe] Couldn't empty {CacheFolder}: {e.Message}");
-            }
         }
 
         private static bool CanRender(WardrobeGarment g, string materialType) =>
@@ -139,10 +132,8 @@ namespace RosDen.Wardrobe.Editor {
         // Everything the picture depends on: the garment's file and maps, the material type, the look and its patterns' files.
         private static string Key(WardrobeGarment g, WardrobeLook look, string materialType) {
             var type = WardrobeMaterialTypes.For(g, materialType);
-            var t = WardrobeSettings.Current.thumbnails;
             var sb = new StringBuilder().Append(Version).Append('/').Append(Dependency(WardrobeGarments.PathOf(g)))
-                .Append('/').Append(Dependency(type.path)).Append('/').Append(Dependency(AssetDatabase.GetAssetPath(type.template)))
-                .Append('/').Append(t.background).Append(t.ambient);
+                .Append('/').Append(Dependency(type.path)).Append('/').Append(Dependency(AssetDatabase.GetAssetPath(type.template)));
             foreach (var o in new Object[] { g.baseColor, g.idMap, g.gradientMap, g.mesh, g.normalMap })
                 sb.Append('/').Append(o != null ? Dependency(AssetDatabase.GetAssetPath(o)) : "-");
             for (int r = 0; r < g.regions.Count && r < WardrobeBaker.MaxRegions; r++) {
@@ -151,10 +142,7 @@ namespace RosDen.Wardrobe.Editor {
                 sb.Append('|').Append(s.pattern).Append('#').Append(pattern != null ? Dependency(pattern.jsonPath) : "-")
                     .Append('x').Append(s.scale.ToString("F2")).Append(s.rotate ? 'r' : '-').Append(':');
                 for (int i = 0; i < Mathf.Max(1, pattern?.slots.Count ?? 1); i++) {
-                    var slot = WardrobeBaker.SlotOf(s, pattern, i);
-                    if (!slot.useGradient || slot.gradient == null) sb.Append(ColorUtility.ToHtmlStringRGB(slot.color));
-                    else foreach (var k in slot.gradient.colorKeys) sb.Append(ColorUtility.ToHtmlStringRGB(k.color)).Append('@').Append(k.time.ToString("F3"));
-                    sb.Append(',');
+                    sb.Append(WardrobeConfigs.Write(WardrobeBaker.SlotOf(s, pattern, i))).Append(',');
                 }
             }
             return sb.ToString();
@@ -179,9 +167,8 @@ namespace RosDen.Wardrobe.Editor {
                 var c = _utility.camera;
                 c.fieldOfView = 30f;
                 c.clearFlags = CameraClearFlags.SolidColor;
-                var t = WardrobeSettings.Current.thumbnails;
-                c.backgroundColor = WardrobeSettings.Color(t.background, Color.gray);
-                _utility.ambientColor = WardrobeSettings.Color(t.ambient, Color.gray);
+                c.backgroundColor = Background;
+                _utility.ambientColor = Ambient;
                 _utility.lights[0].intensity = 1.1f;
                 _utility.lights[0].transform.rotation = Quaternion.LookRotation(new Vector3(0.3f, -0.5f, -1f));
                 _utility.lights[1].intensity = 0.4f;

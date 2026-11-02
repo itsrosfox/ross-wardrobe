@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -9,22 +7,13 @@ using UnityEngine;
 namespace RosDen.Wardrobe.Editor {
     /// <summary>Edits one .rpat.</summary>
     internal class WardrobePatternForm : WardrobeJsonForm {
-        private static readonly string[] PatternOrder = {
-            "format", "id", "version", "name", "type", "group", "description", "author", "disabled", "tileSize", "weights", "normal",
-            "normalStrength", "height", "heightStrength", "normalMode", "surface", "occlusion", "sheen", "colors", "garments",
-        };
-        private static readonly string[] SlotOrder = { "name", "color", "canGradient", "useGradient", "gradient" };
-        private static readonly string[] GarmentOrder = { "garment", "avatar", "version", "weights", "gradient", "normal", "height", "surface", "occlusion", "albedo", "mask" };
         private static readonly string[] Types = { "simple", "hybrid", "complete" };
         private static readonly string[] TypeNames = { "Simple (tiles on any garment)", "Hybrid (colour layout per garment)", "Complete (picture per garment)" };
         private const int MaxSlots = 4;
 
-        public WardrobePatternForm(string path) : base(path, WardrobeMigrations.Kind.Pattern) { }
+        public WardrobePatternForm(string path) : base(path) { }
 
-        protected override string[] Order => PatternOrder;
-
-        // written even when empty, like the generators do
-        protected override ICollection<string> Always => new[] { "format", "id", "version", "name", "group", "description", "author", "colors" };
+        protected override ICollection<string> Always => new[] { "id", "version", "name", "group", "description", "author", "colors" };
 
         // ---------------------------------------------------------------- drawing
 
@@ -37,7 +26,6 @@ namespace RosDen.Wardrobe.Editor {
             Group(j);
             Text(j, "author", "Author");
             TextArea(j, "description", "Description", "Shown as the pattern's tooltip");
-            Toggle(j, "disabled", "Disabled", "Hidden from the picker");
 
             int type = Mathf.Max(0, Array.IndexOf(Types, j.String("type", "simple").Trim().ToLowerInvariant()));
             EditorGUI.BeginChangeCheck();
@@ -74,7 +62,7 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         private void Group(JsonObject j) {
-            var groups = (WardrobeSettings.Current.patternGroups ?? new string[0]).Concat(WardrobePatterns.All.Select(p => p.group))
+            var groups = WardrobePatterns.Groups.Concat(WardrobePatterns.All.Select(p => p.group))
                 .Where(g => !string.IsNullOrWhiteSpace(g)).Distinct().Select(g => (g, g)).ToList();
             EditorGUI.BeginChangeCheck();
             string group = Suggest(new GUIContent("Group", "Where the picker lists it (Plain, Stripes, Checks…)"), j.String("group"), groups,
@@ -88,11 +76,11 @@ namespace RosDen.Wardrobe.Editor {
             EditorGUI.BeginChangeCheck();
             mm = EditorGUILayout.Vector2Field(new GUIContent("Tile Size (mm)", "How big one tile of the tiling maps is on the garment"), mm);
             if (EditorGUI.EndChangeCheck())
-                Set(j, "tileSize", new List<object> { new JsonNumber(Mathf.Max(0.1f, mm.x)), new JsonNumber(Mathf.Max(0.1f, mm.y)) }, false);
+                Set(j, "tileSize", new List<object> { Math.Round(Mathf.Max(0.1f, mm.x), 3), Math.Round(Mathf.Max(0.1f, mm.y), 3) }, false);
         }
 
         private static float Get(List<object> list, int i, float fallback) =>
-            list != null && i < list.Count && list[i] is JsonNumber n ? (float)n.Value : fallback;
+            list != null && i < list.Count && list[i] is double n ? (float)n : fallback;
 
         // ---------------------------------------------------------------- colour slots
 
@@ -103,10 +91,10 @@ namespace RosDen.Wardrobe.Editor {
                 using (new EditorGUILayout.HorizontalScope()) {
                     EditorGUI.BeginChangeCheck();
                     string name = EditorGUILayout.TextField($"Colour {i + 1}", s.String("name"));
-                    if (EditorGUI.EndChangeCheck()) Set(s, "name", name, false, SlotOrder);
+                    if (EditorGUI.EndChangeCheck()) Set(s, "name", name, false);
                     EditorGUI.BeginChangeCheck();
-                    var color = EditorGUILayout.ColorField(GUIContent.none, ParseColor(s.String("color"), Color.white), true, false, false, GUILayout.Width(60));
-                    if (EditorGUI.EndChangeCheck()) Set(s, "color", Hex(color), false, SlotOrder);
+                    var color = EditorGUILayout.ColorField(GUIContent.none, WardrobeConfigs.Color(s.String("color"), Color.white), true, false, false, GUILayout.Width(60));
+                    if (EditorGUI.EndChangeCheck()) Set(s, "color", WardrobeConfigs.Hex(color), false);
                     using (new EditorGUI.DisabledScope(i == 0))
                         if (GUILayout.Button(new GUIContent("▲", "Move up"), EditorStyles.miniButtonLeft, GUILayout.Width(22))) Swap(slots, i, i - 1);
                     using (new EditorGUI.DisabledScope(i == slots.Count - 1))
@@ -117,16 +105,13 @@ namespace RosDen.Wardrobe.Editor {
                     }
                 }
                 EditorGUI.indentLevel++;
-                Toggle(s, "canGradient", "Can Be a Gradient", "Buyers may turn this colour into a gradient along the garment", SlotOrder);
+                Toggle(s, "canGradient", "Can Be a Gradient", "Buyers may turn this colour into a gradient along the garment");
                 if (s.Bool("canGradient")) {
-                    Toggle(s, "useGradient", "Starts as Gradient", null, SlotOrder);
-                    var gradient = WardrobePatterns.ParseGradient((s.Array("gradient") ?? new List<object>()).OfType<string>().ToArray())
-                                   ?? SlotColor.Constant(ParseColor(s.String("color"), Color.white));
+                    Toggle(s, "useGradient", "Starts as Gradient", null);
+                    var gradient = WardrobeConfigs.Gradient(s.String("gradient")) ?? SlotColor.Constant(WardrobeConfigs.Color(s.String("color"), Color.white));
                     EditorGUI.BeginChangeCheck();
                     gradient = EditorGUILayout.GradientField(new GUIContent("Gradient", "The gradient it starts with"), gradient);
-                    if (EditorGUI.EndChangeCheck())
-                        Set(s, "gradient", gradient.colorKeys.Select(k => (object)$"{Hex(k.color)}@{Math.Round(k.time, 3).ToString(CultureInfo.InvariantCulture)}").ToList(),
-                            false, SlotOrder);
+                    if (EditorGUI.EndChangeCheck()) Set(s, "gradient", WardrobeConfigs.Write(gradient), false);
                 }
                 EditorGUI.indentLevel--;
             }
@@ -157,13 +142,13 @@ namespace RosDen.Wardrobe.Editor {
                 EditorGUILayout.HelpBox("A hybrid or complete pattern only shows up for the garments it lists.", MessageType.Warning);
             Targets(j, "None listed: offered for every garment.", g => {
                 if (type == 1) {
-                    Texture(g, "weights", "Weights", "On the garment's UVs: R, G, B, A = colour 1..4", GarmentOrder);
+                    Texture(g, "weights", "Weights", "On the garment's UVs: R, G, B, A = colour 1..4");
                     if (!g.Has("weights")) EditorGUILayout.HelpBox("Needs weights for this garment.", MessageType.Warning);
-                    Texture(g, "gradient", "Gradient", "Optional: its own position along the colours' gradients (else the garment's)", GarmentOrder);
+                    Texture(g, "gradient", "Gradient", "Optional: its own position along the colours' gradients (else the garment's)");
                 } else if (type == 2) {
-                    Texture(g, "albedo", "Albedo", "The picture on the garment's UVs; alpha = where it covers", GarmentOrder);
+                    Texture(g, "albedo", "Albedo", "The picture on the garment's UVs; alpha = where it covers");
                     if (!g.Has("albedo")) EditorGUILayout.HelpBox("Needs an albedo for this garment, or it isn't offered for it.", MessageType.Warning);
-                    Texture(g, "mask", "Mask", "Optional: R = which texels the picture may cover", GarmentOrder);
+                    Texture(g, "mask", "Mask", "Optional: R = which texels the picture may cover");
                 }
                 bool extra = new[] { "normal", "height", "surface", "occlusion" }.Concat(type == 0 ? new[] { "weights", "gradient" } : new string[0]).Any(g.Has);
                 if (!open.TryGetValue(g, out bool shown)) shown = extra;
@@ -171,16 +156,15 @@ namespace RosDen.Wardrobe.Editor {
                 if (!shown) return;
                 EditorGUI.indentLevel++;
                 if (type == 0) {
-                    Texture(g, "weights", "Weights", null, GarmentOrder);
-                    Texture(g, "gradient", "Gradient", null, GarmentOrder);
+                    Texture(g, "weights", "Weights", null);
+                    Texture(g, "gradient", "Gradient", null);
                 }
-                Texture(g, "normal", "Normal", null, GarmentOrder);
-                Texture(g, "height", "Height", null, GarmentOrder);
-                Texture(g, "surface", "Surface", "R metalness, G roughness, A opacity", GarmentOrder);
-                Texture(g, "occlusion", "Occlusion", null, GarmentOrder);
+                Texture(g, "normal", "Normal", null);
+                Texture(g, "height", "Height", null);
+                Texture(g, "surface", "Surface", "R metalness, G roughness, A opacity");
+                Texture(g, "occlusion", "Occlusion", null);
                 EditorGUI.indentLevel--;
             });
         }
-
     }
 }

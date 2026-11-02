@@ -45,8 +45,8 @@ namespace RosDen.Wardrobe.Editor {
 
         /// <summary>Which garment instance the panel edits (null for none). Moves the live preview along.</summary>
         public void SetTarget(WardrobeRecolor rc) {
-            if (rc != _target) _customTab = -1;
             if (rc == _target) return;
+            _customTab = -1;
             var previous = _target;
             Release();
             _target = rc;
@@ -337,9 +337,7 @@ namespace RosDen.Wardrobe.Editor {
                 EditorGUILayout.LabelField("Pick a design for the whole garment. It replaces the parts' repeating patterns.", EditorStyles.wordWrappedMiniLabel);
                 return;
             }
-            using (new EditorGUILayout.HorizontalScope()) {
-                EditorGUILayout.LabelField(pattern.DisplayName, EditorStyles.boldLabel);
-            }
+            EditorGUILayout.LabelField(pattern.DisplayName, EditorStyles.boldLabel);
             if (!string.IsNullOrWhiteSpace(pattern.description))
                 EditorGUILayout.LabelField(pattern.description, EditorStyles.wordWrappedMiniLabel);
             if (pattern.type == WardrobePattern.Kind.Complete)
@@ -515,7 +513,7 @@ namespace RosDen.Wardrobe.Editor {
                     EditorGUILayout.ObjectField("Material", rc.bakedMaterial, typeof(Material), false);
             EditorGUILayout.HelpBox(
                 "Changes go straight onto the garment: each look is baked into a texture and material in " +
-                $"{WardrobeBaker.OutputFolder(rc.garment)}, so it works with any shader and uploads like any other material.",
+                $"{WardrobeMaterialTypes.OutputFolder(rc.garment)}, so it works with any shader and uploads like any other material.",
                 MessageType.None);
         }
 
@@ -598,7 +596,7 @@ namespace RosDen.Wardrobe.Editor {
         // Writes the look as "<Name>.rpre" (in Wardrobe Recolors/<Avatar>/<Garment>/Presets unless picked elsewhere).
         private void SavePreset(WardrobeRecolor rc) {
             if (rc == null || rc.garment == null) return;
-            string folder = WardrobeBaker.OutputFolder(rc.garment) + "/Presets";
+            string folder = WardrobeMaterialTypes.OutputFolder(rc.garment) + "/Presets";
             WardrobeAssets.EnsureFolder(folder);
             string path = EditorUtility.SaveFilePanelInProject("Save Look as Preset", WardrobeAssets.FileName(rc.lookName), WardrobeConfigs.Preset.TrimStart('.'),
                 "Save this look as a .rpre so it shows up under Looks.", folder);
@@ -649,7 +647,8 @@ namespace RosDen.Wardrobe.Editor {
                 else if (output.normal) texture = _previewNormal;
                 else if (output.albedo || output.UsesAlbedo || output.UsesSurface && _previewSurface != null) {
                     var surface = _previewSurface;
-                    if (surface == null && output.UsesSurface) surface = _previewGarmentSurface = GarmentSurfacePreview(g, _previewGarmentSurface);
+                    if (surface == null && output.UsesSurface)
+                        surface = _previewGarmentSurface = _previewGarmentSurface != null ? _previewGarmentSurface : WardrobeBaker.GarmentSurface(g);
                     _previewOutputs.TryGetValue(output.property, out var rt);
                     texture = _previewOutputs[output.property] = WardrobeBaker.RenderPreviewOutput(g, output, _preview, surface, rt);
                 }
@@ -664,31 +663,14 @@ namespace RosDen.Wardrobe.Editor {
             return null;
         }
 
-        private static RenderTexture GarmentSurfacePreview(WardrobeGarment g, RenderTexture rt) {
-            if (rt != null) return rt;
-            return WardrobeBaker.GarmentSurface(g);
-        }
-
         private void ClearPreview() {
             if (_previewRenderer != null) WardrobeBaker.ClearPreview(_previewRenderer, _previewSlot);
             _previewRenderer = null;
-            if (_preview != null) {
-                Object.DestroyImmediate(_preview);
-                _preview = null;
-            }
-            if (_previewNormal != null) {
-                Object.DestroyImmediate(_previewNormal);
-                _previewNormal = null;
-            }
-            if (_previewSurface != null) {
-                Object.DestroyImmediate(_previewSurface);
-                _previewSurface = null;
-            }
-            if (_previewGarmentSurface != null) {
-                Object.DestroyImmediate(_previewGarmentSurface);
-                _previewGarmentSurface = null;
-            }
-            foreach (var rt in _previewOutputs.Values) if (rt != null) Object.DestroyImmediate(rt);
+            _preview = Drop(_preview);
+            _previewNormal = Drop(_previewNormal);
+            _previewSurface = Drop(_previewSurface);
+            _previewGarmentSurface = Drop(_previewGarmentSurface);
+            foreach (var rt in _previewOutputs.Values) Drop(rt);
             _previewOutputs.Clear();
             SceneView.RepaintAll();
         }

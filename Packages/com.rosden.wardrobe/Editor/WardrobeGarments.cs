@@ -13,11 +13,6 @@ namespace RosDen.Wardrobe.Editor {
     /// garment is imported again.
     /// </summary>
     public static class WardrobeGarments {
-        private static readonly string[] Order = {
-            "format", "id", "name", "version", "author", "category", "slot", "bodyHides", "avatar", "prefab", "thumbnail", "mesh", "material", "maps",
-            "idMap", "gradientMap", "metresPerUv", "regions", "partScales",
-        };
-
         // Garments being edited (not imported ones), and the file each is for.
         private static readonly Dictionary<WardrobeGarment, string> Drafts = new Dictionary<WardrobeGarment, string>();
 
@@ -61,7 +56,7 @@ namespace RosDen.Wardrobe.Editor {
             var g = ScriptableObject.CreateInstance<WardrobeGarment>();
             g.hideFlags = HideFlags.DontSave;
             Drafts[g] = path;
-            Fill(g, ReadJson(path), path);
+            Fill(g, WardrobeJson.Parse(File.ReadAllText(path)), path);
             return g;
         }
 
@@ -81,8 +76,6 @@ namespace RosDen.Wardrobe.Editor {
 
         // ---------------------------------------------------------------- reading
 
-        internal static JsonObject ReadJson(string path) => WardrobeJson.Parse(WardrobeMigrations.Read(path, WardrobeMigrations.Kind.Garment));
-
         /// <summary>Fills a garment from its file's json. <paramref name="dependsOn"/> hears every asset path it refers to.</summary>
         internal static void Fill(WardrobeGarment g, JsonObject j, string path, Action<string> dependsOn = null) {
             T Ref<T>(JsonObject o, string key) where T : Object {
@@ -91,20 +84,15 @@ namespace RosDen.Wardrobe.Editor {
                 dependsOn?.Invoke(WardrobeConfigs.Resolve(path, value.Split('#')[0]));
                 return WardrobeConfigs.Load<T>(path, value);
             }
+            // a number (the value everywhere), or { "texture", "channel", "invert" }
             MapChannel Channel(JsonObject maps, string key, float fallback) {
-                object value = maps?[key];
-                if (value is JsonNumber n) return new MapChannel((float)n.Value);
-                if (value is string || value is JsonObject) {
-                    var o = value as JsonObject;
-                    var texture = o != null ? Ref<Texture2D>(o, "texture") : Ref<Texture2D>(maps, key);
-                    var c = new MapChannel(o != null ? (float)o.Number("value", fallback) : fallback) { texture = texture };
-                    if (o != null) {
-                        c.channel = Enum.TryParse(o.String("channel", "R").Trim().ToUpperInvariant(), out TextureChannel ch) ? ch : TextureChannel.R;
-                        c.invert = o.Bool("invert");
-                    }
-                    return c;
-                }
-                return new MapChannel(fallback);
+                if (maps?[key] is double value) return new MapChannel((float)value);
+                if (!(maps?[key] is JsonObject o)) return new MapChannel(fallback);
+                return new MapChannel(fallback) {
+                    texture = Ref<Texture2D>(o, "texture"),
+                    channel = Enum.TryParse(o.String("channel", "R").Trim().ToUpperInvariant(), out TextureChannel ch) ? ch : TextureChannel.R,
+                    invert = o.Bool("invert"),
+                };
             }
 
             g.id = j.String("id").Trim();
@@ -137,16 +125,15 @@ namespace RosDen.Wardrobe.Editor {
             g.metresPerUv = (float)j.Number("metresPerUv", 1);
             g.regions = j.Objects("regions").Select(r => new WardrobeRegion {
                 name = r.String("name", "Region"),
-                ids = (r.Array("parts") ?? new List<object>()).OfType<string>().Select(Hex).Where(c => c.HasValue).Select(c => c.Value).ToList(),
+                ids = (r.Array("parts") ?? new List<object>()).OfType<string>().Select(Part).Where(c => c.HasValue).Select(c => c.Value).ToList(),
             }).ToList();
-            g.partScales = j.Objects("partScales").Select(p => (part: Hex(p.String("part")), scale: (float)p.Number("metresPerUv")))
+            g.partScales = j.Objects("partScales").Select(p => (part: Part(p.String("part")), scale: (float)p.Number("metresPerUv")))
                 .Where(p => p.part.HasValue).Select(p => new WardrobePartScale { id = p.part.Value, metresPerUv = p.scale }).ToList();
         }
 
-        private static Color32? Hex(string text) =>
-            !string.IsNullOrWhiteSpace(text) && ColorUtility.TryParseHtmlString(text.Trim(), out var c) ? (Color32)c : (Color32?)null;
-
-        private static string Hex(Color32 c) => "#" + ColorUtility.ToHtmlStringRGB(c);
+        // An ID map colour, "#RRGGBB".
+        private static Color32? Part(string hex) =>
+            !string.IsNullOrWhiteSpace(hex) && ColorUtility.TryParseHtmlString(hex.Trim(), out var c) ? (Color32)c : (Color32?)null;
 
         // ---------------------------------------------------------------- writing
 
@@ -154,28 +141,25 @@ namespace RosDen.Wardrobe.Editor {
         public static string Save(WardrobeGarment g, string path = null) {
             path = path ?? PathOf(g);
             if (path == null) throw new InvalidOperationException($"'{g.name}' has no .rgarm file to save to.");
-            JsonObject j;
-            try {
-                j = File.Exists(path) ? ReadJson(path) : new JsonObject();
-            } catch (FormatException) {
-                j = new JsonObject();
-            }
-            Write(g, j, path);
-            string text = WardrobeJson.Write(j);
+            string text = Text(g, path);
             if (File.Exists(path) && File.ReadAllText(path).Replace("\r\n", "\n") == text) return path;
             File.WriteAllText(path, text);
             AssetDatabase.ImportAsset(path);
             return path;
         }
 
-        /// <summary>The garment's values into its json (for <see cref="Save"/>, and for editors comparing drafts).</summary>
-        internal static void Write(WardrobeGarment g, JsonObject j, string path) {
-            void Put(JsonObject o, string key, object value, string[] order) => o.Put(key, value, order);
-            void Text(JsonObject o, string key, string value, string[] order) => Put(o, key, value ?? "", order);
+        /// <summary>The garment as its file would say it: the file's json (if it can be read) with the garment's values in it.</summary>
+        internal static string Text(WardrobeGarment g, string path) {
+            JsonObject j;
+            try {
+                j = File.Exists(path) ? WardrobeJson.Parse(File.ReadAllText(path)) : new JsonObject();
+            } catch (FormatException) {
+                j = new JsonObject();
+            }
             string Ref(Object asset) => WardrobeConfigs.Relative(path, asset);
             object Channel(MapChannel c) {
-                if (c == null) return new JsonNumber(0);
-                if (c.texture == null) return new JsonNumber(Math.Round(c.value, 4));
+                if (c == null) return 0.0;
+                if (c.texture == null) return Math.Round(c.value, 4);
                 var o = new JsonObject();
                 o["texture"] = Ref(c.texture);
                 o["channel"] = (c.channel == TextureChannel.None ? TextureChannel.R : c.channel).ToString();
@@ -183,63 +167,50 @@ namespace RosDen.Wardrobe.Editor {
                 return o;
             }
 
-            Put(j, "format", new JsonNumber(WardrobeMigrations.Current(WardrobeMigrations.Kind.Garment)), Order);
-            Text(j, "id", g.id, Order);
-            Text(j, "name", g.displayName, Order);
-            Text(j, "version", g.version, Order);
-            Text(j, "author", g.author, Order);
-            Text(j, "category", g.category, Order);
-            Text(j, "slot", g.slot, Order);
+            j["id"] = g.id ?? "";
+            j["name"] = g.displayName ?? "";
+            j["version"] = g.version ?? "";
+            j["author"] = g.author ?? "";
+            j["category"] = g.category ?? "";
+            j["slot"] = g.slot ?? "";
             var hides = (g.bodyHides ?? new List<string>()).Where(k => !string.IsNullOrWhiteSpace(k)).Select(k => (object)k.Trim()).ToList();
-            if (hides.Count > 0) Put(j, "bodyHides", hides, Order);
+            if (hides.Count > 0) j["bodyHides"] = hides;
             else j.Remove("bodyHides");
             var avatar = j.Object("avatar") ?? new JsonObject();
             avatar["id"] = g.avatarId ?? "";
             avatar["version"] = g.avatarVersion ?? "";
-            Put(j, "avatar", avatar, Order);
-            Text(j, "prefab", Ref(g.prefab), Order);
-            Text(j, "thumbnail", Ref(g.thumbnail), Order);
-            Text(j, "mesh", Ref(g.mesh), Order);
-            Text(j, "material", g.defaultMaterial, Order);
+            j["avatar"] = avatar;
+            j["prefab"] = Ref(g.prefab);
+            j["thumbnail"] = Ref(g.thumbnail);
+            j["mesh"] = Ref(g.mesh);
+            j["material"] = g.defaultMaterial ?? "";
 
-            var mapOrder = new[] { "baseColor", "normal", "metalness", "roughness", "occlusion", "sheen", "opacity" };
             var maps = j.Object("maps") ?? new JsonObject();
-            Put(maps, "baseColor", Ref(g.baseColor), mapOrder);
-            Put(maps, "normal", Ref(g.normalMap), mapOrder);
-            Put(maps, "metalness", Channel(g.metalness), mapOrder);
-            Put(maps, "roughness", Channel(g.roughness), mapOrder);
-            Put(maps, "occlusion", Channel(g.occlusion), mapOrder);
-            Put(maps, "sheen", Channel(g.sheen), mapOrder);
-            if (g.opacity != null && g.opacity.texture != null) Put(maps, "opacity", Channel(g.opacity), mapOrder);
+            maps["baseColor"] = Ref(g.baseColor);
+            maps["normal"] = Ref(g.normalMap);
+            maps["metalness"] = Channel(g.metalness);
+            maps["roughness"] = Channel(g.roughness);
+            maps["occlusion"] = Channel(g.occlusion);
+            maps["sheen"] = Channel(g.sheen);
+            if (g.opacity != null && g.opacity.texture != null) maps["opacity"] = Channel(g.opacity);
             else maps.Remove("opacity");
-            Put(j, "maps", maps, Order);
+            j["maps"] = maps;
 
-            Text(j, "idMap", Ref(g.idMap), Order);
-            Text(j, "gradientMap", Ref(g.gradientMap), Order);
-            Put(j, "metresPerUv", new JsonNumber(Math.Round(g.metresPerUv, 6)), Order);
-            Put(j, "regions", g.regions.Select(r => {
+            j["idMap"] = Ref(g.idMap);
+            j["gradientMap"] = Ref(g.gradientMap);
+            j["metresPerUv"] = Math.Round(g.metresPerUv, 6);
+            j["regions"] = g.regions.Select(r => {
                 var o = new JsonObject();
                 o["name"] = r.name ?? "";
-                o["parts"] = r.ids.Select(c => (object)Hex(c)).ToList();
+                o["parts"] = r.ids.Select(c => (object)WardrobeConfigs.Hex(c)).ToList();
                 return (object)o;
-            }).ToList(), Order);
-            Put(j, "partScales", g.partScales.Select(p => {
+            }).ToList();
+            j["partScales"] = g.partScales.Select(p => {
                 var o = new JsonObject();
-                o["part"] = Hex(p.id);
-                o["metresPerUv"] = new JsonNumber(Math.Round(p.metresPerUv, 6));
+                o["part"] = WardrobeConfigs.Hex(p.id);
+                o["metresPerUv"] = Math.Round(p.metresPerUv, 6);
                 return (object)o;
-            }).ToList(), Order);
-        }
-
-        /// <summary>The garment as its file would say it (for telling whether a draft has changes).</summary>
-        internal static string Text(WardrobeGarment g, string path) {
-            JsonObject j;
-            try {
-                j = File.Exists(path) ? ReadJson(path) : new JsonObject();
-            } catch (FormatException) {
-                j = new JsonObject();
-            }
-            Write(g, j, path);
+            }).ToList();
             return WardrobeJson.Write(j);
         }
     }

@@ -1,5 +1,4 @@
 {
-    "format": 1,
     "id": "rosden.gradient",
     "version": "1.0.0",
     "name": "Gradient",
@@ -12,10 +11,7 @@
             "color": "#F4F4F2",
             "canGradient": true,
             "useGradient": true,
-            "gradient": [
-                "#F4F4F2@0",
-                "#595959@1"
-            ]
+            "gradient": "#F4F4F2@0, #595959@1"
         }
     ],
     "type": "hybrid"

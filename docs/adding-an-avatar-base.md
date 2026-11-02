@@ -4,8 +4,8 @@ A `.ravt` file describes an avatar base (Winterpaw's Masculine Canine, Rexouium,
 
 1. **Recognising avatars.** It tells Ros' Wardrobe which avatars in a scene are built on the base, so the window
    lists the garments fitted to it. Every garment pack needs this part.
-2. **The Avatar section** (optional). It lists the base's body sliders, toggles and choices, and which textures
-   are fur, so buyers can shape the body and recolour the fur in the window.
+2. **The Avatar section** (optional). It lists the base's body sliders, toggles and choices, so buyers can shape
+   the body in the window.
 
 The `.ravt` ships with the garment packs for that base. Several packs shipping the same `.ravt` is fine: they share
 its id, and Ros' Wardrobe uses one.
@@ -16,12 +16,10 @@ its id, and Ros' Wardrobe uses one.
 ## Making one
 
 1. Import the avatar base into your project.
-2. Open **Edit → Project Settings → Ros' Wardrobe**, tab **Avatars**, and click **New Avatar…**.
-3. Drop in the base's **Model or Prefab**. That fills in the name and id, and records the model so avatars
-   built from it are recognised.
-4. Pick a folder (e.g. `<Pack>/Avatars`) and click **Create**.
+2. In your pack's `Avatars` folder, pick **Assets → Create → Ros' Wardrobe → Avatar Base** and name the file.
+3. Select it, and drop the base's **Model or Prefab** into **Files**, so avatars built from it are recognised.
 
-In its editor:
+In the Inspector (click **Save** when you're done):
 
 - **Name**: shown in the window.
 - **Id**: a stable id like `creator.base-name` (e.g. `winterpaw.masculine-canine`). Garments name the base by it,
@@ -97,38 +95,9 @@ What a `set` can contain:
 - Worn garments follow the body's shape keys of the same name. A slider that sets shape keys garments have too
   (e.g. `Buff`) reshapes them with the body.
 
-Buyers save body shapes as `.rbody` presets. You can ship some with the `.ravt`: shape the body in the window, *Save
-as Body Preset…*, and move the file into your pack.
-
-## Fur recolouring
-
-The Avatar section's **Skin** recolours the fur with a gradient, from the fur's darkest parts to its lightest. List
-the textures to recolour in `fur`:
-
-```json
-"fur": [
-    { "texture": "T_WolfBody_BC", "range": [68, 245] },
-    { "texture": "T_WolfTail1_BC", "range": [74, 245] },
-    { "texture": "T_Gray_Mane_BC", "range": [14, 81], "span": 0.45 }
-]
-```
-
-- `texture`: the texture's file name, without its extension. Every material on the avatar that uses it is
-  recoloured.
-- `range`: the fur's brightness, 0 to 255: `[darkest, lightest]`. Brightness in this range is mapped onto the skin's
-  gradient, from start to end. Measure it in an image editor on the texture's darkest and lightest fur (not the
-  eyes, nose or pads).
-- `span` (optional, default 1): how much of the gradient the range covers. Use it for parts that should stay in the
-  dark end, like a darker mane (0.45 = the first 45 % of the gradient).
-- Saturated pixels (eyes, markings, coloured details) aren't recoloured, so they keep their colour on every skin.
-
-Skins are saved as `.rskin`. Ship a few with the `.ravt`: make one under *Custom skin*, *Save as Skin…*, and move it
-into your pack.
-
 ## Shipping it
 
-Put the `.ravt` (and any `.rbody` and `.rskin`) in `<Pack>/Avatars`. If you made a `.ravt` for a base no one had
-covered, consider sharing it with the base's creator or opening an issue here, so every creator for that base can
-use the same id.
+Put the `.ravt` in `<Pack>/Avatars`. If you made a `.ravt` for a base no one had covered, consider sharing it
+with the base's creator or opening an issue here, so every creator for that base can use the same id.
 
 See the [file reference](file-reference.md#ravt) for every field.

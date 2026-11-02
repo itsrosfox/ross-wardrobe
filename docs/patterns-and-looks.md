@@ -21,13 +21,12 @@ each slot's colour, and slots marked *can gradient* can be gradients too.
 
 ## Making a pattern
 
-1. Open **Edit → Project Settings → Ros' Wardrobe**, tab **Patterns**, and click **New Pattern…**.
-2. Set its **Name**, **Id** (e.g. `yourname.pinstripe`), **Type** and **Group** (where the picker lists it:
-   Plain, Blocks, Graphics, Stripes, Checks, Weaves, Knits, Prints…).
+1. Make a folder for the pattern and its maps (`<Pattern>/`), and in it pick
+   **Assets → Create → Ros' Wardrobe → Pattern**. Name the file after the pattern.
+2. Select it. In the Inspector, set its **Name**, **Id** (e.g. `yourname.pinstripe`), **Type** and **Group** (where
+   the picker lists it: Plain, Blocks, Graphics, Stripes, Checks, Weaves, Knits, Prints).
 3. Under **For**, tick the garments it's for. Leave a simple pattern's list empty to offer it for every garment.
-4. Pick a folder and click **Create**. The pattern gets a folder of its own (`<Pattern>/<Pattern>.rpat`) for its
-   maps.
-5. In its editor, set the **colour slots**, then the maps for its kind, below.
+4. Set the **colour slots**, then the maps for its kind (below), and click **Save**.
 
 Then put a garment on in the window, open **Custom**, and try the pattern on a part.
 
@@ -87,12 +86,11 @@ A picture painted on one garment's UVs that isn't recoloured: graphics, logos, p
 
 A complete pattern is only offered for the garment fits it has an albedo for.
 
-### Limiting and hiding patterns
+### Limiting patterns
 
 - **Garments**: a pattern that lists garments is only offered for them. A simple pattern can name just the
   garment id (every fit), an id and an avatar, and a major version (`"1"` = 1.x). Hybrid and complete patterns
   name each fit.
-- **Disabled**: hides it from the picker without deleting it (e.g. while it's not finished).
 - When several packs ship a pattern with the same **id**, it's offered for the garments of all of them. Use your own
   id prefix (`yourname.`) unless you mean to extend someone else's pattern.
 
@@ -106,8 +104,8 @@ A look sets a pattern and colours for the parts of a garment.
 2. Click **Save as Preset…**. Ros' Wardrobe writes a `.rpre` for the garment.
 3. Move it next to the garment or into the pattern's folder, so it ships with your pack.
 
-**In Project Settings → Ros' Wardrobe → Presets**, you can then edit it, or make one from scratch with
-**New Preset…**:
+**In the Inspector**, select the `.rpre` to edit it, or make one from scratch with
+**Assets → Create → Ros' Wardrobe → Preset**:
 
 - **Name**, **Group** and **Order** arrange the Looks gallery.
 - **Look Name** names the look's own colouring ("Navy & White"); each colourway has its own name.

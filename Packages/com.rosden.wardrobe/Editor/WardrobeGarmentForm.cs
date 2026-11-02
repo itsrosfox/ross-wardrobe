@@ -26,8 +26,6 @@ namespace RosDen.Wardrobe.Editor {
 
         public WardrobeGarmentForm(string path) : base(path) => Revert();
 
-        public override string Name => _draft != null ? Title(_draft) : System.IO.Path.GetFileNameWithoutExtension(path);
-
         public override bool Dirty {
             get {
                 if (_draft == null) return false;
@@ -175,7 +173,7 @@ namespace RosDen.Wardrobe.Editor {
             Field("avatarVersion", "Avatar Version");
             if (unknown)
                 EditorGUILayout.HelpBox($"No .ravt in the project has the id {g.avatarId}, so Ros' Wardrobe can't tell which avatars it fits. " +
-                                        "Make one in Project Settings → Ros' Wardrobe → Avatars, and ship it with the garment.", MessageType.Warning);
+                                        "Make one with Assets → Create → Ros' Wardrobe → Avatar Base, and ship it with the garment.", MessageType.Warning);
         }
 
         private void DrawMaterial(WardrobeGarment g) {
@@ -192,7 +190,7 @@ namespace RosDen.Wardrobe.Editor {
             if (EditorGUI.EndChangeCheck() && picked <= types.Count) _so.FindProperty("defaultMaterial").stringValue = picked == 0 ? "" : types[picked - 1].id;
             if (types.Count == 0)
                 EditorGUILayout.HelpBox("No material type (.rmat) in the project is for this garment, so it can't be recoloured. Ros' Wardrobe ships PBR; " +
-                                        "make others in Project Settings → Ros' Wardrobe → Materials.", MessageType.Warning);
+                                        "make others with Assets → Create → Ros' Wardrobe → Material Type.", MessageType.Warning);
             foreach (var t in types.Where(t => t.Problem != null)) EditorGUILayout.HelpBox(t.Problem, MessageType.Warning);
             if (types.Count > 0)
                 Note($"Buyers can pick: {string.Join(", ", types.Where(t => t.Problem == null).Select(t => t.DisplayName))}. Each .rmat lists the garments it's for.");
@@ -337,7 +335,7 @@ namespace RosDen.Wardrobe.Editor {
         private static void DrawUsage(WardrobeGarment g) {
             var presets = WardrobePresets.For(g);
             Note($"{presets.Count} presets (.rpre) in the project are for this fit (they list its id, or no garments). Save as Preset… in the " +
-                 "recolour editor writes one; edit it in Project Settings → Ros' Wardrobe → Presets.");
+                 "recolour editor writes one; select it to edit it.");
             foreach (var preset in presets)
                 using (new EditorGUILayout.HorizontalScope()) {
                     EditorGUILayout.LabelField(preset.DisplayName, preset.colourways.Count == 0 ? "" : $"{preset.colourways.Count} colourways", EditorStyles.miniLabel);
@@ -347,11 +345,8 @@ namespace RosDen.Wardrobe.Editor {
 
             EditorGUILayout.Space();
             var patterns = WardrobePatterns.All.Where(p => p.Fits(g)).ToList();
-            Note($"{patterns.Count(p => !p.disabled)} patterns (.rpat) in the project fit it (those that list no garments, or list this one). " +
+            Note($"{patterns.Count} patterns (.rpat) in the project fit it (those that list no garments, or list this one). " +
                  "Tiling patterns use the part scales from Generate from UV islands.");
-            var disabled = patterns.Where(p => p.disabled).Select(p => p.DisplayName).ToList();
-            if (disabled.Count > 0)
-                EditorGUILayout.HelpBox($"Disabled, so not in the picker ({disabled.Count}): {string.Join(", ", disabled)}.", MessageType.Warning);
             if (g.partScales.Count == 0)
                 EditorGUILayout.HelpBox("Regenerate the ID map (Generate from UV islands) so patterns know each part's real-world size.", MessageType.Info);
         }

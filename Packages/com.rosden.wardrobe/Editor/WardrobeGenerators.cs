@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -214,9 +213,13 @@ namespace RosDen.Wardrobe.Editor {
 
             var data = new ushort[size * size];
             for (int i = 0; i < data.Length; i++) data[i] = (ushort)Mathf.RoundToInt(Mathf.Clamp01(values[i]) * 65535f);
+            var texture = new Texture2D(size, size, TextureFormat.R16, false, true);
+            texture.SetPixelData(data, 0);
+            byte[] png = texture.EncodeToPNG(); // a 16-bit grayscale PNG
+            Object.DestroyImmediate(texture);
 
             string path = $"{WardrobeGarments.FolderOf(g)}/{WardrobeAssets.FileName(WardrobeAssets.BaseName(g) + " Gradient")}.png";
-            var gradientMap = WardrobeAssets.WriteTexture(path, Png16.EncodeGray(data, size, size), ti => {
+            var gradientMap = WardrobeAssets.WriteTexture(path, png, ti => {
                 ti.textureType = TextureImporterType.Default;
                 ti.sRGBTexture = false;
                 ti.mipmapEnabled = false;
@@ -250,12 +253,6 @@ namespace RosDen.Wardrobe.Editor {
             public Vector3[] normal;     // model space
             public int[] region;         // index into the garment's regions, -1 = none
             public Bounds bounds;        // of the whole mesh
-
-            /// <summary>The texel's position across the garment's bounds, 0..1 per axis.</summary>
-            public Vector3 Across(int i) => new Vector3(
-                (position[i].x - bounds.min.x) / Mathf.Max(bounds.size.x, 1e-6f),
-                (position[i].y - bounds.min.y) / Mathf.Max(bounds.size.y, 1e-6f),
-                (position[i].z - bounds.min.z) / Mathf.Max(bounds.size.z, 1e-6f));
 
             /// <summary>Grows the covered texels' values outwards so filtering doesn't pull in the empty ones.</summary>
             public void Pad<T>(T[] data) => Dilate(data, (bool[])covered.Clone(), size, PaddingFor(size));
@@ -427,96 +424,6 @@ namespace RosDen.Wardrobe.Editor {
                 if (x < size - 1) Visit(i, i + 1);
                 if (y > 0) Visit(i, i - size);
                 if (y < size - 1) Visit(i, i + size);
-            }
-        }
-
-        /// <summary>Minimal 16-bit grayscale PNG writer (Unity's encoders only do 8 bits per channel here).</summary>
-        private static class Png16 {
-            private static readonly uint[] CrcTable = MakeCrcTable();
-
-            /// <param name="data">Rows bottom-up, like Unity textures.</param>
-            public static byte[] EncodeGray(ushort[] data, int width, int height) {
-                int stride = width * 2;
-                var raw = new byte[height * (stride + 1)];
-                var previous = new byte[stride];
-                var current = new byte[stride];
-                for (int row = 0; row < height; row++) {
-                    int y = height - 1 - row; // PNG rows run top-down
-                    for (int x = 0; x < width; x++) {
-                        ushort v = data[y * width + x];
-                        current[x * 2] = (byte)(v >> 8);
-                        current[x * 2 + 1] = (byte)v;
-                    }
-                    int o = row * (stride + 1);
-                    raw[o] = 2; // "Up" filter: difference to the row above, which compresses smooth gradients well
-                    for (int k = 0; k < stride; k++) raw[o + 1 + k] = (byte)(current[k] - previous[k]);
-                    (previous, current) = (current, previous);
-                }
-
-                byte[] deflated;
-                using (var ms = new MemoryStream()) {
-                    using (var deflate = new DeflateStream(ms, System.IO.Compression.CompressionLevel.Optimal, true)) deflate.Write(raw, 0, raw.Length);
-                    deflated = ms.ToArray();
-                }
-                var zlib = new byte[deflated.Length + 6];
-                zlib[0] = 0x78;
-                zlib[1] = 0x9C;
-                Buffer.BlockCopy(deflated, 0, zlib, 2, deflated.Length);
-                WriteBigEndian(zlib, zlib.Length - 4, Adler32(raw));
-
-                var header = new byte[13];
-                WriteBigEndian(header, 0, (uint)width);
-                WriteBigEndian(header, 4, (uint)height);
-                header[8] = 16; // bit depth; colour type, compression, filter and interlace stay 0
-
-                using (var png = new MemoryStream()) {
-                    png.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, 0, 8);
-                    WriteChunk(png, "IHDR", header);
-                    WriteChunk(png, "IDAT", zlib);
-                    WriteChunk(png, "IEND", new byte[0]);
-                    return png.ToArray();
-                }
-            }
-
-            private static void WriteChunk(Stream s, string type, byte[] data) {
-                var length = new byte[4];
-                WriteBigEndian(length, 0, (uint)data.Length);
-                var typeBytes = System.Text.Encoding.ASCII.GetBytes(type);
-                s.Write(length, 0, 4);
-                s.Write(typeBytes, 0, 4);
-                s.Write(data, 0, data.Length);
-                uint crc = 0xFFFFFFFFu;
-                foreach (byte b in typeBytes) crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
-                foreach (byte b in data) crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
-                var crcBytes = new byte[4];
-                WriteBigEndian(crcBytes, 0, crc ^ 0xFFFFFFFFu);
-                s.Write(crcBytes, 0, 4);
-            }
-
-            private static uint[] MakeCrcTable() {
-                var table = new uint[256];
-                for (uint n = 0; n < 256; n++) {
-                    uint c = n;
-                    for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-                    table[n] = c;
-                }
-                return table;
-            }
-
-            private static uint Adler32(byte[] data) {
-                uint a = 1, b = 0;
-                foreach (byte d in data) {
-                    a = (a + d) % 65521;
-                    b = (b + a) % 65521;
-                }
-                return (b << 16) | a;
-            }
-
-            private static void WriteBigEndian(byte[] buffer, int offset, uint value) {
-                buffer[offset] = (byte)(value >> 24);
-                buffer[offset + 1] = (byte)(value >> 16);
-                buffer[offset + 2] = (byte)(value >> 8);
-                buffer[offset + 3] = (byte)value;
             }
         }
     }

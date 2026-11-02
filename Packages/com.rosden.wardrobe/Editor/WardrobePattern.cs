@@ -58,7 +58,6 @@ namespace RosDen.Wardrobe.Editor {
 
         public string id, version, name, group, description, author, jsonPath;
         public Kind type;
-        public bool disabled;
         public Maps tiled = new Maps();
         public Vector2 tileSize = new Vector2(0.01f, 0.01f);   // metres
         public float normalStrength = 1f, heightStrength = 1f, sheen = 0.3f;
@@ -92,7 +91,12 @@ namespace RosDen.Wardrobe.Editor {
 
     /// <summary>Every .rpat in the project, read once and again whenever the project changes.</summary>
     public static class WardrobePatterns {
-        internal static int Format => WardrobeMigrations.Current(WardrobeMigrations.Kind.Pattern);
+        /// <summary>What parts a look doesn't set are in.</summary>
+        public const string DefaultPattern = "rosden.solid";
+
+        /// <summary>Pattern groups in the order the picker shows them; other groups follow by name.</summary>
+        public static readonly string[] Groups = { "Plain", "Blocks", "Graphics", "Stripes", "Checks", "Weaves", "Knits", "Prints" };
+
         private static List<WardrobePattern> _all;
 
         /// <summary>Goes up whenever the patterns are read again, so caches keyed on it refresh.</summary>
@@ -100,10 +104,8 @@ namespace RosDen.Wardrobe.Editor {
 
         [Serializable]
         internal class Json {
-            public int format = Format;
             public string id, version, name, group, description, author;
-            public bool disabled;
-            public float[] tileSize = new float[0];
+                public float[] tileSize = new float[0];
             public string weights, normal, height, surface, occlusion;
             public float normalStrength = 1f, heightStrength = 1f, sheen = 0.3f;
             public string normalMode = "blend";   // blend or replace
@@ -116,7 +118,7 @@ namespace RosDen.Wardrobe.Editor {
         internal class SlotJson {
             public string name, color;
             public bool canGradient, useGradient;
-            public string[] gradient = new string[0];   // "#RRGGBB@position"
+            public string gradient;   // "#RRGGBB@0, #RRGGBB@1"
         }
 
         [Serializable]
@@ -131,13 +133,13 @@ namespace RosDen.Wardrobe.Editor {
             }
         }
 
-        /// <summary>The patterns offered for a garment (enabled ones that fit it), by group.</summary>
-        public static List<WardrobePattern> For(WardrobeGarment g) => All.Where(p => !p.disabled && p.Fits(g)).ToList();
+        /// <summary>The patterns offered for a garment, by group.</summary>
+        public static List<WardrobePattern> For(WardrobeGarment g) => All.Where(p => p.Fits(g)).ToList();
 
-        /// <summary>The pattern with the id (empty = wardrobe.json's default pattern).</summary>
+        /// <summary>The pattern with the id (empty = the default pattern).</summary>
         public static WardrobePattern Get(string id) {
-            if (string.IsNullOrWhiteSpace(id)) id = WardrobeSettings.Current.defaultPattern;
-            return string.IsNullOrWhiteSpace(id) ? null : All.FirstOrDefault(p => string.Equals(p.id, id.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(id)) id = DefaultPattern;
+            return All.FirstOrDefault(p => WardrobeConfigs.SameId(p.id, id));
         }
 
         public static void Forget() => _all = null;
@@ -148,14 +150,13 @@ namespace RosDen.Wardrobe.Editor {
                 var pattern = Read(path);
                 if (pattern == null) continue;
                 // the same pattern shipped by several packs: offered for every garment any of them is for
-                var same = list.FirstOrDefault(p => string.Equals(p.id, pattern.id, StringComparison.OrdinalIgnoreCase));
+                var same = list.FirstOrDefault(p => WardrobeConfigs.SameId(p.id, pattern.id));
                 if (same == null) list.Add(pattern);
                 else if (same.garments.Count > 0 && pattern.garments.Count == 0) same.garments.Clear();
                 else if (same.garments.Count > 0)
                     same.garments.AddRange(pattern.garments.Where(s => !same.garments.Any(o => o.target.Same(s.target))));
             }
-            var groups = WardrobeSettings.Current.patternGroups ?? new string[0];
-            _all = list.OrderBy(p => { int i = Array.IndexOf(groups, p.group); return i < 0 ? groups.Length : i; })
+            _all = list.OrderBy(p => { int i = Array.IndexOf(Groups, p.group); return i < 0 ? Groups.Length : i; })
                 .ThenBy(p => p.group).ThenBy(p => p.DisplayName).ToList();
             Revision++;
         }
@@ -163,7 +164,7 @@ namespace RosDen.Wardrobe.Editor {
         private static WardrobePattern Read(string jsonPath) {
             Json json;
             try {
-                json = JsonUtility.FromJson<Json>(WardrobeMigrations.Read(jsonPath, WardrobeMigrations.Kind.Pattern));
+                json = JsonUtility.FromJson<Json>(File.ReadAllText(jsonPath));
             } catch (Exception e) {
                 Debug.LogWarning($"[Ros' Wardrobe] Couldn't read {jsonPath}: {e.Message}");
                 return null;
@@ -174,7 +175,7 @@ namespace RosDen.Wardrobe.Editor {
             }
             var pattern = new WardrobePattern {
                 id = json.id.Trim(), version = json.version ?? "", name = json.name, group = json.group ?? "",
-                description = json.description ?? "", author = json.author ?? "", jsonPath = jsonPath, disabled = json.disabled,
+                description = json.description ?? "", author = json.author ?? "", jsonPath = jsonPath,
                 tiled = new WardrobePattern.Maps {
                     weights = Load(jsonPath, json.weights), normal = Load(jsonPath, json.normal), height = Load(jsonPath, json.height),
                     surface = Load(jsonPath, json.surface), occlusion = Load(jsonPath, json.occlusion),
@@ -194,9 +195,9 @@ namespace RosDen.Wardrobe.Editor {
             foreach (var s in (json.colors ?? new SlotJson[0]).Take(4)) {
                 var slot = new WardrobePattern.Slot {
                     name = string.IsNullOrWhiteSpace(s.name) ? $"Colour {pattern.slots.Count + 1}" : s.name,
-                    color = ParseColor(s.color, Color.white), canGradient = s.canGradient, useGradient = s.useGradient,
+                    color = WardrobeConfigs.Color(s.color, Color.white), canGradient = s.canGradient, useGradient = s.useGradient,
                 };
-                slot.gradient = ParseGradient(s.gradient) ?? SlotColor.Constant(slot.color);
+                slot.gradient = WardrobeConfigs.Gradient(s.gradient) ?? SlotColor.Constant(slot.color);
                 pattern.slots.Add(slot);
             }
             if (pattern.slots.Count == 0) pattern.slots.Add(new WardrobePattern.Slot { name = "Colour", canGradient = true, gradient = SlotColor.Constant(Color.white) });
@@ -223,27 +224,5 @@ namespace RosDen.Wardrobe.Editor {
             return texture;
         }
 
-        private static Color ParseColor(string text, Color fallback) =>
-            !string.IsNullOrWhiteSpace(text) && ColorUtility.TryParseHtmlString(text.Trim(), out var c) ? c : fallback;
-
-        /// <summary>The garments a config file's "garments" list names (garment, avatar, version).</summary>
-        internal static List<WardrobeTarget> ReadTargets(JsonObject j) =>
-            j.Objects("garments").Where(o => o.String("garment").Trim().Length > 0).Select(o => new WardrobeTarget {
-                garment = o.String("garment").Trim(), avatar = o.String("avatar").Trim(), version = o.String("version"),
-            }).ToList();
-
-        internal static Gradient ParseGradient(string[] keys) {
-            if (keys == null || keys.Length == 0) return null;
-            var colorKeys = new List<GradientColorKey>();
-            for (int i = 0; i < keys.Length && colorKeys.Count < 8; i++) {
-                var parts = keys[i].Split('@');
-                float t = keys.Length == 1 ? 0 : (float)i / (keys.Length - 1);
-                if (parts.Length > 1 && float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float parsed)) t = parsed;
-                colorKeys.Add(new GradientColorKey(ParseColor(parts[0], Color.white), Mathf.Clamp01(t)));
-            }
-            var gradient = new Gradient();
-            gradient.SetKeys(colorKeys.ToArray(), new[] { new GradientAlphaKey(1, 0), new GradientAlphaKey(1, 1) });
-            return gradient;
-        }
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using UnityEditor;
@@ -28,8 +27,6 @@ namespace RosDen.Wardrobe.Editor {
             public float[] values = new float[4];
             public List<string> alsoOn = new List<string>();
             public string keyword;
-
-            public bool Uses(Source s) => !albedo && !normal && channels.Contains(s);
 
             public bool UsesSurface => !albedo && !normal && channels.Any(c => c >= Source.Metalness);
 
@@ -84,11 +81,10 @@ namespace RosDen.Wardrobe.Editor {
                 : All.Where(t => t.Fits(g) && t.Problem == null)
                     .OrderBy(t => WardrobeConfigs.SameId(t.id, g.defaultMaterial) ? 0 : 1).ThenBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
 
-        /// <summary>The garment's type with that id (or name, as looks saved before .rmat files say), else its default.</summary>
-        public static WardrobeMaterialType For(WardrobeGarment g, string idOrName) {
+        /// <summary>The garment's type with that id, else its default.</summary>
+        public static WardrobeMaterialType For(WardrobeGarment g, string id) {
             var types = For(g);
-            return types.FirstOrDefault(t => WardrobeConfigs.SameId(t.id, idOrName)) ??
-                   types.FirstOrDefault(t => WardrobeConfigs.SameId(t.name, idOrName)) ?? types.FirstOrDefault();
+            return types.FirstOrDefault(t => WardrobeConfigs.SameId(t.id, id)) ?? types.FirstOrDefault();
         }
 
         // ---------------------------------------------------------------- reading
@@ -97,7 +93,7 @@ namespace RosDen.Wardrobe.Editor {
             var list = new List<WardrobeMaterialType>();
             foreach (string path in WardrobeConfigs.Paths(WardrobeConfigs.Material)) {
                 try {
-                    var t = Read(path, WardrobeJson.Parse(WardrobeMigrations.Read(path, WardrobeMigrations.Kind.Material)));
+                    var t = Read(path, WardrobeJson.Parse(File.ReadAllText(path)));
                     if (t.id.Length == 0) Debug.LogWarning($"[Ros' Wardrobe] {path} has no id");
                     else if (list.All(o => !WardrobeConfigs.SameId(o.id, t.id))) list.Add(t);
                 } catch (Exception e) {
@@ -140,21 +136,20 @@ namespace RosDen.Wardrobe.Editor {
             var floats = j.Object("floats");
             if (floats != null)
                 for (int i = 0; i < floats.Count; i++)
-                    if (floats.Values[i] is JsonNumber n) t.floats[floats.Keys[i]] = (float)n.Value;
+                    if (floats.Values[i] is double f) t.floats[floats.Keys[i]] = (float)f;
             var colors = j.Object("colors");
             if (colors != null)
                 for (int i = 0; i < colors.Count; i++)
-                    if (colors.Values[i] is string s && ColorUtility.TryParseHtmlString(s.Trim(), out var c)) t.colors[colors.Keys[i]] = c;
+                    if (colors.Values[i] is string s) t.colors[colors.Keys[i]] = WardrobeConfigs.Color(s, Color.white);
             t.keywords = (j.Array("keywords") ?? new List<object>()).OfType<string>().Where(k => k.Trim().Length > 0).ToList();
-            t.garments = WardrobePatterns.ReadTargets(j);
+            t.garments = WardrobeConfigs.Targets(j);
             return t;
         }
 
         private static (WardrobeMaterialType.Source, float) ParseSource(object v, float fallback, string path, string property) {
-            if (v is JsonNumber n) return (WardrobeMaterialType.Source.Value, Mathf.Clamp01((float)n.Value));
+            if (v is double n) return (WardrobeMaterialType.Source.Value, Mathf.Clamp01((float)n));
             if (v is string s) {
                 s = s.Trim().ToLowerInvariant();
-                if (float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out float f)) return (WardrobeMaterialType.Source.Value, Mathf.Clamp01(f));
                 int i = Array.IndexOf(WardrobeMaterialType.SourceNames, s);
                 if (i > 0) return ((WardrobeMaterialType.Source)i, 0);
                 Debug.LogWarning($"[Ros' Wardrobe] {path}: '{property}' has a channel \"{s}\", which isn't one of {string.Join(", ", WardrobeMaterialType.SourceNames.Skip(1))} or a number");
@@ -192,11 +187,7 @@ namespace RosDen.Wardrobe.Editor {
 
             WardrobeAssets.EnsureFolder(folder);
             bool create = material == null;
-            var made = type.template != null ? new Material(type.template) : new Material(type.Shader);
-            if (type.shader != null) made.shader = type.shader;
-            foreach (var f in type.floats) if (made.HasProperty(f.Key)) made.SetFloat(f.Key, f.Value);
-            foreach (var c in type.colors) if (made.HasProperty(c.Key)) made.SetColor(c.Key, c.Value);
-            foreach (string k in type.keywords) made.EnableKeyword(k);
+            var made = New(type);
 
             RenderTexture surface = null;
             try {
@@ -241,12 +232,8 @@ namespace RosDen.Wardrobe.Editor {
         /// normal, ones that match a property's channels) set, packed ones left as the template has them. The caller destroys it.
         /// </summary>
         public static Material PreviewMaterial(WardrobeGarment g, WardrobeMaterialType type) {
-            var made = type.template != null ? new Material(type.template) : new Material(type.Shader);
+            var made = New(type);
             made.hideFlags = HideFlags.HideAndDontSave;
-            if (type.shader != null) made.shader = type.shader;
-            foreach (var f in type.floats) if (made.HasProperty(f.Key)) made.SetFloat(f.Key, f.Value);
-            foreach (var c in type.colors) if (made.HasProperty(c.Key)) made.SetColor(c.Key, c.Value);
-            foreach (string k in type.keywords) made.EnableKeyword(k);
             foreach (var output in type.outputs) {
                 Texture texture = output.albedo ? g.baseColor : output.normal ? g.normalMap : Existing(g, output);
                 if (texture == null) continue;
@@ -254,6 +241,16 @@ namespace RosDen.Wardrobe.Editor {
                     if (made.HasProperty(property)) made.SetTexture(property, texture);
                 if (!string.IsNullOrEmpty(output.keyword)) made.EnableKeyword(output.keyword);
             }
+            return made;
+        }
+
+        // The type's template (or shader) with its floats, colours and keywords.
+        private static Material New(WardrobeMaterialType type) {
+            var made = type.template != null ? new Material(type.template) : new Material(type.Shader);
+            if (type.shader != null) made.shader = type.shader;
+            foreach (var f in type.floats) if (made.HasProperty(f.Key)) made.SetFloat(f.Key, f.Value);
+            foreach (var c in type.colors) if (made.HasProperty(c.Key)) made.SetColor(c.Key, c.Value);
+            foreach (string k in type.keywords) made.EnableKeyword(k);
             return made;
         }
 
