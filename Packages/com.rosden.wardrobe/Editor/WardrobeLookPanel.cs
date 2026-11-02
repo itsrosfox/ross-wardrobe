@@ -544,25 +544,32 @@ namespace RosDen.Wardrobe.Editor {
         // A garment with a pending look that no open panel shows (so nothing previews the look any more).
         private static bool Unwatched(WardrobeRecolor rc) => rc != null && Pending.Contains(rc) && Open.All(p => p._target != rc);
 
-        private static void Bake(WardrobeRecolor rc) {
-            if (rc == null || !Pending.Remove(rc) || WardrobeBaker.Problem(rc) != null) return;
+        // False when baking failed; the look stays pending, so the next save, build or change tries again.
+        private static bool Bake(WardrobeRecolor rc) {
+            if (rc == null || !Pending.Contains(rc) || WardrobeBaker.Problem(rc) != null) return true;
             try {
                 WardrobeBaker.Apply(rc, recordUndo: false);   // the material always follows the look, so it's no undo step of its own
             } catch (Exception e) {
                 Debug.LogException(e);
-                return;
+                return false;
             }
+            Pending.Remove(rc);
             foreach (var panel in Open.Where(p => p._target == rc).ToList()) {
                 panel.ClearPreview();   // the garment's own material shows the look now
                 panel._repaint();
             }
+            return true;
         }
 
-        /// <summary>Bakes every pending look onto its garment (scene save, play mode, VRChat build, script reload, quitting).</summary>
-        public static void FlushAll() {
-            foreach (var rc in Pending.ToList()) Bake(rc);
-            Pending.Clear();
+        /// <summary>Bakes every pending look onto its garment (scene save, play mode, VRChat build, quitting). False when one failed.</summary>
+        public static bool FlushAll() {
+            Pending.RemoveWhere(rc => rc == null);
+            bool baked = true;
+            foreach (var rc in Pending.ToList()) baked &= Bake(rc);
+            return baked;
         }
+
+        private const string PendingAcrossReload = "RosDen.Wardrobe.Pending";
 
         [InitializeOnLoadMethod]
         private static void Hook() {
@@ -570,8 +577,17 @@ namespace RosDen.Wardrobe.Editor {
             EditorApplication.playModeStateChanged += state => {
                 if (state == PlayModeStateChange.ExitingEditMode) FlushAll();
             };
-            AssemblyReloadEvents.beforeAssemblyReload += FlushAll;
-            EditorApplication.quitting += FlushAll;
+            // A script reload (a package added, say) is no time to write assets, and it forgets what's pending: the
+            // looks are remembered and baked right after it.
+            AssemblyReloadEvents.beforeAssemblyReload += () => SessionState.SetIntArray(PendingAcrossReload,
+                Pending.Where(rc => rc != null).Select(rc => rc.GetInstanceID()).ToArray());
+            EditorApplication.delayCall += () => {
+                foreach (int id in SessionState.GetIntArray(PendingAcrossReload, new int[0]))
+                    if (EditorUtility.InstanceIDToObject(id) is WardrobeRecolor rc) Pending.Add(rc);
+                SessionState.EraseIntArray(PendingAcrossReload);
+                FlushAll();
+            };
+            EditorApplication.quitting += () => FlushAll();
             UnityEditor.SceneManagement.EditorSceneManager.sceneOpened += (scene, mode) => RepairMissing();
             EditorApplication.delayCall += RepairMissing;   // scenes already open after a script reload
         }
