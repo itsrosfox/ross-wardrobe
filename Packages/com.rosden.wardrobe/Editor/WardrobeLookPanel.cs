@@ -593,12 +593,22 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         // A worn garment whose baked material is gone (deleted, or Wardrobe Recolors wasn't copied along) renders
-        // magenta: bake the look it keeps again.
+        // magenta or in its shipped material: bake the look it keeps again. When a garment update renamed what's in its
+        // model, the look has lost its renderer too: it's the garment's renderer wearing its mesh.
         private static void RepairMissing() {
             foreach (var rc in Object.FindObjectsOfType<WardrobeRecolor>(true)) {
-                if (EditorUtility.IsPersistent(rc) || rc.target == null || rc.garment == null || rc.look == null) continue;
+                if (EditorUtility.IsPersistent(rc) || rc.garment == null || rc.look == null) continue;
+                bool retargeted = false;
+                if (rc.target == null) {
+                    var skins = rc.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                    rc.target = skins.FirstOrDefault(s => s.sharedMesh != null && s.sharedMesh == rc.garment.mesh) ?? skins.FirstOrDefault();
+                    if (rc.target == null) continue;
+                    retargeted = true;
+                    EditorUtility.SetDirty(rc);
+                }
                 var materials = rc.target.sharedMaterials;
-                if (rc.materialSlot < 0 || rc.materialSlot >= materials.Length || materials[rc.materialSlot] != null) continue;
+                if (rc.materialSlot < 0 || rc.materialSlot >= materials.Length) continue;
+                if (!retargeted && materials[rc.materialSlot] != null && rc.bakedMaterial != null) continue;
                 if (WardrobeBaker.Problem(rc) != null) continue;
                 try {
                     WardrobeBaker.Apply(rc, recordUndo: false);

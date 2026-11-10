@@ -14,9 +14,11 @@ Shader "Ros' Wardrobe/Standard Double Sided" {
         _OcclusionStrength ("Occlusion Strength", Range(0, 1)) = 1
         _OcclusionMap ("Occlusion (G)", 2D) = "white" {}
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 0
+        // where the albedo's alpha is below this the cloth isn't drawn: cut-out parts such as round buttons
+        _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
     }
     SubShader {
-        Tags { "RenderType" = "Opaque" }
+        Tags { "RenderType" = "TransparentCutout" "Queue" = "AlphaTest" }
         LOD 300
         Cull [_Cull]
 
@@ -28,7 +30,7 @@ Shader "Ros' Wardrobe/Standard Double Sided" {
 
         sampler2D _MainTex, _MetallicGlossMap, _BumpMap, _OcclusionMap;
         fixed4 _Color;
-        half _Glossiness, _GlossMapScale, _Metallic, _BumpScale, _OcclusionStrength;
+        half _Glossiness, _GlossMapScale, _Metallic, _BumpScale, _OcclusionStrength, _Cutoff;
 
         struct Input {
             float2 uv_MainTex;
@@ -38,6 +40,7 @@ Shader "Ros' Wardrobe/Standard Double Sided" {
         void surf(Input IN, inout SurfaceOutputStandard o) {
             fixed4 c = tex2D(_MainTex, IN.uv_MainTex) * _Color;
             o.Albedo = c.rgb;
+            clip(c.a - _Cutoff);   // also in the shadow pass (addshadow)
             o.Alpha = c.a;
 #if _METALLICGLOSSMAP
             half4 mg = tex2D(_MetallicGlossMap, IN.uv_MainTex);

@@ -108,6 +108,7 @@ namespace RosDen.Wardrobe.Editor {
             g.avatarVersion = avatar?.String("version") ?? "";
             g.prefab = Ref<GameObject>(j, "prefab");
             g.thumbnail = Ref<Texture2D>(j, "thumbnail");
+            g.source = Ref<GameObject>(j, "source");
             g.mesh = Ref<Mesh>(j, "mesh");
             g.defaultMaterial = j.String("material");
 
@@ -119,6 +120,7 @@ namespace RosDen.Wardrobe.Editor {
             g.occlusion = Channel(maps, "occlusion", 1);
             g.sheen = Channel(maps, "sheen", 0.2f);
             g.opacity = Channel(maps, "opacity", 1);
+            g.mapSize = j.Int("mapSize");
 
             g.idMap = Ref<Texture2D>(j, "idMap");
             g.gradientMap = Ref<Texture2D>(j, "gradientMap");
@@ -182,6 +184,8 @@ namespace RosDen.Wardrobe.Editor {
             j["avatar"] = avatar;
             j["prefab"] = Ref(g.prefab);
             j["thumbnail"] = Ref(g.thumbnail);
+            if (g.source != null) j["source"] = Ref(g.source);
+            else j.Remove("source");
             j["mesh"] = Ref(g.mesh);
             j["material"] = g.defaultMaterial ?? "";
 
@@ -195,6 +199,8 @@ namespace RosDen.Wardrobe.Editor {
             if (g.opacity != null && g.opacity.texture != null) maps["opacity"] = Channel(g.opacity);
             else maps.Remove("opacity");
             j["maps"] = maps;
+            if (g.mapSize > 0) j["mapSize"] = (double)g.mapSize;
+            else j.Remove("mapSize");
 
             j["idMap"] = Ref(g.idMap);
             j["gradientMap"] = Ref(g.gradientMap);

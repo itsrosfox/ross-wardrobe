@@ -40,7 +40,12 @@ namespace RosDen.Wardrobe {
         [Tooltip("Picture in the Ros' Wardrobe window; rendered from the garment when empty")]
         public Texture2D thumbnail;
 
-        [Tooltip("Mesh the ID and gradient maps are made from, and thumbnails are rendered with")]
+        [Tooltip("The garment as your cloth tool exports it (e.g. Marvelous Designer's FBX), rigged to the avatar's skeleton. " +
+                 "Fit to Avatar makes the mesh from it")]
+        public GameObject source;
+
+        [Tooltip("Mesh the prefab wears (Fit to Avatar makes it from the source, with the body's shape keys), the ID and " +
+                 "gradient maps are made from, and thumbnails are rendered with")]
         public Mesh mesh;
 
         [Tooltip("Material type (.rmat id) the garment starts in; empty = the first that fits")]
@@ -60,6 +65,9 @@ namespace RosDen.Wardrobe {
         public MapChannel sheen = new MapChannel(0.2f);
         [Tooltip("Without a texture: the base colour's alpha")]
         public MapChannel opacity = new MapChannel(1);
+
+        [Tooltip("Largest size of the textures Make Material packs for the shipped material; 0 = the base colour's size")]
+        public int mapSize;
 
         // ---------------------------------------------------------------- recolouring
 

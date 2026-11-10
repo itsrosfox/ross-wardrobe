@@ -32,6 +32,8 @@ namespace RosDen.Wardrobe.Editor {
             /// <summary>Metres of garment per 1 UV unit on this island.</summary>
             public float metresPerUv => uvArea > 0 ? Mathf.Sqrt(weight / uvArea) : 0f;
             internal bool hasBounds;
+            internal int triangles;
+            internal Vector2 uvMin = Vector2.positiveInfinity, uvMax = Vector2.negativeInfinity;
         }
 
         private struct MeshData {
@@ -67,7 +69,32 @@ namespace RosDen.Wardrobe.Editor {
                 isl.bounds.Encapsulate(pa);
                 isl.bounds.Encapsulate(pb);
                 isl.bounds.Encapsulate(pc);
+                isl.triangles++;
+                isl.uvMin = Vector2.Min(isl.uvMin, Vector2.Min(ua, Vector2.Min(ub, uc)));
+                isl.uvMax = Vector2.Max(isl.uvMax, Vector2.Max(ua, Vector2.Max(ub, uc)));
             }
+
+            // Copies of one part laid on the same UVs (a garment's buttons, 3D topstitching) are one island: they share
+            // the ID map's pixels anyway, and counted apart they'd crowd the ID colours and the UV area.
+            var copyOf = new Dictionary<(int, int, int, int, int, int), int>();
+            var merged = new int[count];
+            var kept = new List<Island>();
+            for (int k = 0; k < count; k++) {
+                var isl = islands[k];
+                var key = (isl.triangles, Mathf.RoundToInt(isl.uvArea * 1e7f), Mathf.RoundToInt(isl.uvMin.x * 1e5f), Mathf.RoundToInt(isl.uvMin.y * 1e5f),
+                    Mathf.RoundToInt(isl.uvMax.x * 1e5f), Mathf.RoundToInt(isl.uvMax.y * 1e5f));
+                if (isl.uvArea > 0 && copyOf.TryGetValue(key, out int first)) {
+                    merged[k] = first;
+                    var into = kept[first];
+                    into.bounds.Encapsulate(isl.bounds);
+                    continue;
+                }
+                copyOf[key] = merged[k] = kept.Count;
+                kept.Add(isl);
+            }
+            for (int t = 0; t < triIsland.Length; t++) triIsland[t] = merged[triIsland[t]];
+            islands = kept.ToArray();
+            count = islands.Length;
 
             var order = Enumerable.Range(0, count).OrderByDescending(k => islands[k].uvArea).ToArray();
             var remap = new int[count];
@@ -343,14 +370,21 @@ namespace RosDen.Wardrobe.Editor {
             return data;
         }
 
+        // A mesh saved on its own (a fit's .asset) has no model around it: it sits as the garment's prefab wears it.
         internal static Matrix4x4 ModelMatrix(Mesh mesh) {
             var model = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GetAssetPath(mesh));
-            if (model == null) return Matrix4x4.identity;
+            if (model != null) return ModelMatrix(mesh, model) ?? Matrix4x4.identity;
+            foreach (var g in WardrobeGarments.All.Where(g => g.mesh == mesh))
+                if ((g.prefab != null ? ModelMatrix(mesh, g.prefab) : null) is Matrix4x4 m) return m;
+            return Matrix4x4.identity;
+        }
+
+        private static Matrix4x4? ModelMatrix(Mesh mesh, GameObject model) {
             foreach (var smr in model.GetComponentsInChildren<SkinnedMeshRenderer>(true))
                 if (smr.sharedMesh == mesh) return smr.transform.localToWorldMatrix;
             foreach (var filter in model.GetComponentsInChildren<MeshFilter>(true))
                 if (filter.sharedMesh == mesh) return filter.transform.localToWorldMatrix;
-            return Matrix4x4.identity;
+            return null;
         }
 
         private static MeshData ReadRawMesh(Mesh mesh) {

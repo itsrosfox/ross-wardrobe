@@ -232,6 +232,9 @@ namespace RosDen.Wardrobe.Editor {
             Words(j, "matches", "Names", "Words in the avatar's name, or its prefab's or model's, that mean it's this base");
 
             EditorGUILayout.Space();
+            DrawFitting(j);
+
+            EditorGUILayout.Space();
             var id = j.String("id").Trim();
             var scene = Object.FindObjectsOfType<Animator>().Select(a => a.gameObject).Where(go => go.transform.parent == null).ToList();
             var recognised = scene.Where(go => WardrobeConfigs.SameId(WardrobeAvatars.Match(go)?.id, id)).ToList();
@@ -240,6 +243,42 @@ namespace RosDen.Wardrobe.Editor {
                     : "No avatar in the open scenes is recognised as this base (save to check again).");
             var fits = WardrobeGarments.All.Where(g => WardrobeConfigs.SameId(g.avatarId, id)).ToList();
             Note(fits.Count == 0 ? "No garment in the project is fitted to it yet." : $"Garments fitted to it: {string.Join(", ", fits.Select(Title).Distinct())}.");
+        }
+
+        // "fitting": what Fit to Avatar does for garments made for this base.
+        private void DrawFitting(JsonObject j) {
+            Header("Fitting garments");
+            Note("Fit to Avatar (in a garment's setup) copies these body shape keys onto the garment, so it follows the body. " +
+                 "Leave it empty for the ones the sliders set. Shape keys a garment sets to hide the body are never copied.");
+            var fitting = j.Object("fitting") ?? new JsonObject();
+            Words(fitting, "shapeKeys", "Shape Keys", "Body shape keys garments follow");
+
+            Note("Bones garments shouldn't move with (e.g. the tail), by the start of their name, and the bone that takes their weight instead.");
+            var bones = fitting.Object("mergeBones") ?? new JsonObject();
+            for (int i = 0; i < bones.Count; i++) {
+                using (new EditorGUILayout.HorizontalScope()) {
+                    EditorGUI.BeginChangeCheck();
+                    string prefix = EditorGUILayout.DelayedTextField(i == 0 ? "Bones Starting With" : " ", bones.Keys[i]);
+                    string bone = EditorGUILayout.DelayedTextField(bones.Values[i] as string ?? "", GUILayout.Width(110));
+                    if (EditorGUI.EndChangeCheck()) {
+                        bones.Keys[i] = prefix.Trim();
+                        bones.Values[i] = bone.Trim();
+                    }
+                    if (GUILayout.Button(new GUIContent("✕", "Remove"), EditorStyles.miniButton, GUILayout.Width(22))) {
+                        bones.Remove(bones.Keys[i]);
+                        Set(fitting, "mergeBones", bones, bones.Count == 0);
+                        Set(j, "fitting", fitting, fitting.Count == 0);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+            }
+            if (GUILayout.Button("Add Bones", GUILayout.Width(160))) {
+                string prefix = "Bone.";
+                for (int n = 2; bones.Has(prefix); n++) prefix = $"Bone{n}.";
+                bones[prefix] = "Hips";
+            }
+            Set(fitting, "mergeBones", bones, bones.Count == 0);
+            Set(j, "fitting", fitting, fitting.Count == 0);
         }
     }
 

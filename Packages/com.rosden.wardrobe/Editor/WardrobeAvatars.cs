@@ -17,8 +17,21 @@ namespace RosDen.Wardrobe.Editor {
         public string body = "Body";
         /// <summary>The body sliders the window shows, in order.</summary>
         public List<WardrobeSlider> sliders = new List<WardrobeSlider>();
+        /// <summary>Body shape keys Fit to Avatar copies onto garments, so they follow the body (empty: the ones the sliders set).</summary>
+        public List<string> fitShapes = new List<string>();
+        /// <summary>Bones garments shouldn't move with (by the start of their name), and the bone that takes their weight instead.</summary>
+        public List<(string prefix, string bone)> fitBones = new List<(string, string)>();
 
         public string DisplayName => string.IsNullOrWhiteSpace(name) ? id : name;
+
+        /// <summary>The base's model or prefab in this project (the first of its files that's here), or null.</summary>
+        public GameObject Model => guids.Select(AssetDatabase.GUIDToAssetPath).Where(p => !string.IsNullOrEmpty(p))
+            .Select(AssetDatabase.LoadAssetAtPath<GameObject>).FirstOrDefault(go => go != null);
+
+        /// <summary>The body shape keys garments follow: the .ravt's list, else every body shape key a slider sets.</summary>
+        public List<string> FitShapes => fitShapes.Count > 0 ? fitShapes
+            : sliders.SelectMany(s => s.set.Concat(s.options.SelectMany(o => o.set))).Where(v => !v.IsObject && v.path == body)
+                .Select(v => v.shape).Distinct().ToList();
     }
 
     /// <summary>
@@ -111,6 +124,13 @@ namespace RosDen.Wardrobe.Editor {
                             slider.options.Add((option.String("name").Trim(), Values(option.Object("set"), a.body)));
                         if (slider.name.Length > 0) a.sliders.Add(slider);
                     }
+                    var fitting = j.Object("fitting");
+                    a.fitShapes = (fitting?.Array("shapeKeys") ?? new List<object>()).OfType<string>().Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+                    var bones = fitting?.Object("mergeBones");
+                    if (bones != null)
+                        for (int i = 0; i < bones.Count; i++)
+                            if (bones.Values[i] is string bone && bones.Keys[i].Trim().Length > 0 && bone.Trim().Length > 0)
+                                a.fitBones.Add((bones.Keys[i].Trim(), bone.Trim()));
                     if (a.id.Length == 0) Debug.LogWarning($"[Ros' Wardrobe] {path} has no id");
                     else if (list.All(o => !WardrobeConfigs.SameId(o.id, a.id))) list.Add(a);
                 } catch (Exception e) {

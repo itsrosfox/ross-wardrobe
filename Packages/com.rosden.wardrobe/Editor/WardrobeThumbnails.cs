@@ -18,7 +18,7 @@ namespace RosDen.Wardrobe.Editor {
         public const int Size = 192;
         private const int MaxCached = 512;
         private const int PerBatch = 4;
-        private const int Version = 3;   // bump when the pictures change, so the disk cache isn't used
+        private const int Version = 4;   // bump when the pictures change, so the disk cache isn't used
 
         public static readonly Color Background = new Color32(0x3D, 0x3D, 0x42, 255), Ambient = new Color32(0x73, 0x73, 0x7A, 255);
 

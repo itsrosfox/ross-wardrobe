@@ -104,11 +104,16 @@ namespace RosDen.Wardrobe.Editor {
             Follow(avatar);
         }
 
-        /// <summary>Gives every garment worn on the avatar the body's weights of the shape keys they share (as in-game).</summary>
-        public static void Follow(GameObject avatar, bool undo = true) {
+        /// <summary>
+        /// Gives every garment worn on the avatar the body's weights of the shape keys they share (as in-game). Without
+        /// <paramref name="undo"/> the change is still kept as the scene's (a prefab override where it's an instance).
+        /// </summary>
+        /// <returns>Whether any garment's weights changed.</returns>
+        public static bool Follow(GameObject avatar, bool undo = true) {
             var b = WardrobeAvatars.Match(avatar);
             var body = BodyOf(avatar, b);
-            if (body == null || body.sharedMesh == null) return;
+            if (body == null || body.sharedMesh == null) return false;
+            bool changed = false;
             foreach (var rc in avatar.GetComponentsInChildren<WardrobeRecolor>(true))
             foreach (var skin in rc.GetComponentsInChildren<SkinnedMeshRenderer>(true)) {
                 var mesh = skin.sharedMesh;
@@ -120,6 +125,36 @@ namespace RosDen.Wardrobe.Editor {
                     if (!recorded && undo) Undo.RecordObject(skin, "Body Shape");
                     recorded = true;
                     skin.SetBlendShapeWeight(i, body.GetBlendShapeWeight(j));
+                }
+                if (recorded && !undo) {
+                    if (PrefabUtility.IsPartOfPrefabInstance(skin)) PrefabUtility.RecordPrefabInstancePropertyModifications(skin);
+                    EditorUtility.SetDirty(skin);
+                }
+                changed |= recorded;
+            }
+            return changed;
+        }
+
+        // A garment's shape key weights are the scene's: unsaved, or saved before the body or the garment's fit changed,
+        // a worn garment wouldn't match the body it's on. Every opened scene's avatars take the body's weights again.
+        [InitializeOnLoadMethod]
+        private static void FollowOnOpen() {
+            UnityEditor.SceneManagement.EditorSceneManager.sceneOpened += (scene, mode) => FollowAll();
+            EditorApplication.delayCall += FollowAll;   // scenes already open after a script reload or at startup
+        }
+
+        private static void FollowAll() {
+            var avatars = new HashSet<GameObject>();
+            foreach (var rc in UnityEngine.Object.FindObjectsOfType<WardrobeRecolor>(true)) {
+                if (rc == null || EditorUtility.IsPersistent(rc)) continue;
+                var avatar = WardrobeWindow.AvatarRoot(rc.transform);
+                if (avatar != null) avatars.Add(avatar);
+            }
+            foreach (var avatar in avatars) {
+                try {
+                    if (Follow(avatar, undo: false)) Debug.Log($"[Ros' Wardrobe] '{avatar.name}': worn garments took on the body's shape keys again.", avatar);
+                } catch (Exception e) {
+                    Debug.LogException(e);
                 }
             }
         }

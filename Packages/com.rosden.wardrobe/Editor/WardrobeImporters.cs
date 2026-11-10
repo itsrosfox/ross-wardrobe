@@ -46,9 +46,17 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         // New files start from the smallest file of their kind; the inspector edits the rest.
+        internal const string GarmentTemplate =
+            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n    \"category\": \"Tops\",\n    \"slot\": \"Top\"\n}\n";
+        internal const string AvatarTemplate =
+            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"\",\n    \"author\": \"\",\n    \"matches\": [],\n    \"guids\": []\n}\n";
+        internal const string MaterialTemplate =
+            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n" +
+            "    \"textures\": [\n        { \"property\": \"_MainTex\", \"channels\": \"albedo\" },\n" +
+            "        { \"property\": \"_BumpMap\", \"channels\": \"normal\" }\n    ]\n}\n";
+
         [MenuItem("Assets/Create/Ros' Wardrobe/Garment", false, 2000)]
-        private static void NewGarment() => New("New Garment" + WardrobeConfigs.Garment,
-            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n    \"category\": \"Tops\",\n    \"slot\": \"Top\"\n}\n");
+        private static void NewGarment() => New("New Garment" + WardrobeConfigs.Garment, GarmentTemplate);
 
         [MenuItem("Assets/Create/Ros' Wardrobe/Pattern", false, 2001)]
         private static void NewPattern() => New("New Pattern" + WardrobeConfigs.Pattern,
@@ -61,14 +69,10 @@ namespace RosDen.Wardrobe.Editor {
             "    \"parts\": [\n        {\n            \"region\": \"*\",\n            \"pattern\": \"rosden.solid\",\n            \"colors\": [\"#F4F4F2\"]\n        }\n    ]\n}\n");
 
         [MenuItem("Assets/Create/Ros' Wardrobe/Avatar Base", false, 2003)]
-        private static void NewAvatar() => New("New Avatar" + WardrobeConfigs.Avatar,
-            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"\",\n    \"author\": \"\",\n    \"matches\": [],\n    \"guids\": []\n}\n");
+        private static void NewAvatar() => New("New Avatar" + WardrobeConfigs.Avatar, AvatarTemplate);
 
         [MenuItem("Assets/Create/Ros' Wardrobe/Material Type", false, 2004)]
-        private static void NewMaterial() => New("New Material Type" + WardrobeConfigs.Material,
-            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n" +
-            "    \"textures\": [\n        { \"property\": \"_MainTex\", \"channels\": \"albedo\" },\n" +
-            "        { \"property\": \"_BumpMap\", \"channels\": \"normal\" }\n    ]\n}\n");
+        private static void NewMaterial() => New("New Material Type" + WardrobeConfigs.Material, MaterialTemplate);
 
         private static void New(string file, string json) => ProjectWindowUtil.CreateAssetWithContent(file, json);
     }

@@ -174,13 +174,90 @@ namespace RosDen.Wardrobe.Editor {
         /// made (or made again) when the garment, the .rmat or its template changed. Texture properties whose channels the
         /// garment's own textures already hold use those textures; others get a packed texture next to the material.
         /// </summary>
-        public static Material BaseMaterial(WardrobeGarment g, WardrobeMaterialType type) {
+        public static Material BaseMaterial(WardrobeGarment g, WardrobeMaterialType type) => Build(g, type, OutputFolder(g), Key(g, type), false);
+
+        // ---------------------------------------------------------------- the material the garment ships in
+
+        /// <summary>Where the garment's shipped material goes: "&lt;Garment&gt; (&lt;Type&gt;).mat" next to the .rgarm.</summary>
+        public static string ShippedPath(WardrobeGarment g, WardrobeMaterialType type) => $"{WardrobeGarments.FolderOf(g)}/{MaterialName(g, type)}.mat";
+
+        /// <summary>Whether the shipped material is made from the garment's maps and the type as they are now.</summary>
+        public static bool ShippedUpToDate(WardrobeGarment g, WardrobeMaterialType type) =>
+            AssetImporter.GetAtPath(ShippedPath(g, type))?.userData == Key(g, type, true);
+
+        /// <summary>
+        /// Make Material: the garment's material in its starting type, next to the .rgarm so it ships with the garment,
+        /// with the textures the type wants packed made from the garment's maps (at most <see cref="WardrobeGarment.mapSize"/>)
+        /// and the type's shader from the garment's own pack when it has a copy (so buyers don't need Ros' Wardrobe).
+        /// The maps are imported as what they hold first (the normal map as one, the others linear), and the material is
+        /// put on the prefab's renderers that wear the garment's mesh.
+        /// </summary>
+        public static Material Ship(WardrobeGarment g, WardrobeMaterialType type) {
+            PrepareMaps(g);
+            var material = Build(g, type, WardrobeGarments.FolderOf(g), Key(g, type, true), true);
+            Wear(g, material);
+            return material;
+        }
+
+        // The normal map imported as a normal map, and the maps that hold data rather than colour without sRGB.
+        private static void PrepareMaps(WardrobeGarment g) {
+            void Change(Texture2D texture, Func<TextureImporter, bool> change) {
+                if (texture == null) return;
+                string path = AssetDatabase.GetAssetPath(texture);
+                if (AssetImporter.GetAtPath(path) is TextureImporter importer && change(importer)) importer.SaveAndReimport();
+            }
+            Change(g.normalMap, ti => {
+                if (ti.textureType == TextureImporterType.NormalMap) return false;
+                ti.textureType = TextureImporterType.NormalMap;
+                return true;
+            });
+            foreach (var map in new[] { g.metalness, g.roughness, g.occlusion, g.sheen, g.opacity })
+                if (map?.texture != g.baseColor)
+                    Change(map?.texture, ti => {
+                        if (!ti.sRGBTexture) return false;
+                        ti.sRGBTexture = false;
+                        return true;
+                    });
+        }
+
+        // Puts the material on every slot of the prefab's renderers that wear the garment's mesh.
+        private static void Wear(WardrobeGarment g, Material material) {
+            if (g.prefab == null || g.mesh == null) return;
+            string path = AssetDatabase.GetAssetPath(g.prefab);
+            var root = PrefabUtility.LoadPrefabContents(path);
+            try {
+                bool changed = false;
+                foreach (var skin in root.GetComponentsInChildren<SkinnedMeshRenderer>(true).Where(s => s.sharedMesh == g.mesh)) {
+                    var slots = Enumerable.Repeat(material, Mathf.Max(1, g.mesh.subMeshCount)).ToArray();
+                    if (skin.sharedMaterials.SequenceEqual(slots)) continue;
+                    skin.sharedMaterials = slots;
+                    changed = true;
+                }
+                if (changed) PrefabUtility.SaveAsPrefabAsset(root, path);
+            } finally {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        // A shader asset in the project with the same name, the closest to the garment (its pack's copy), else the shader itself.
+        private static Shader PackShader(WardrobeGarment g, Shader shader) {
+            if (shader == null) return null;
+            var folder = WardrobeGarments.FolderOf(g).Split('/');
+            int Shared(string path) => path.Split('/').Zip(folder, (a, b) => a == b).TakeWhile(x => x).Count();
+            return AssetDatabase.FindAssets("t:Shader", new[] { "Assets" }).Select(AssetDatabase.GUIDToAssetPath)
+                .Select(p => (path: p, shader: AssetDatabase.LoadAssetAtPath<Shader>(p))).Where(x => x.shader != null && x.shader.name == shader.name)
+                .OrderByDescending(x => Shared(x.path)).Select(x => x.shader).FirstOrDefault() ?? shader;
+        }
+
+        private static string MaterialName(WardrobeGarment g, WardrobeMaterialType type) =>
+            WardrobeAssets.FileName($"{WardrobeAssets.BaseName(g)} ({type.DisplayName})");
+
+        // The garment's material in a type, in a folder: kept while its key matches, else made again.
+        private static Material Build(WardrobeGarment g, WardrobeMaterialType type, string folder, string key, bool shipped) {
             string problem = type.Problem;
             if (problem != null) throw new InvalidOperationException(problem);
-            string folder = OutputFolder(g);
-            string name = WardrobeAssets.FileName($"{WardrobeAssets.BaseName(g)} ({type.DisplayName})");
+            string name = MaterialName(g, type);
             string path = $"{folder}/{name}.mat";
-            string key = Key(g, type);
             var material = AssetDatabase.LoadAssetAtPath<Material>(path);
             var importer = material != null ? AssetImporter.GetAtPath(path) : null;
             if (material != null && importer != null && importer.userData == key) return material;
@@ -188,6 +265,8 @@ namespace RosDen.Wardrobe.Editor {
             WardrobeAssets.EnsureFolder(folder);
             bool create = material == null;
             var made = New(type);
+            if (shipped) made.shader = PackShader(g, made.shader);
+            int maxSize = shipped ? g.mapSize : 0;
 
             RenderTexture surface = null;
             try {
@@ -199,7 +278,7 @@ namespace RosDen.Wardrobe.Editor {
                         texture = Existing(g, output);
                         if (texture == null) {
                             if (output.UsesSurface && surface == null) surface = WardrobeBaker.GarmentSurface(g);
-                            texture = WritePacked(g, $"{folder}/{name} {Clean(output.property)}.png", output, g.baseColor, surface);
+                            texture = WritePacked(g, $"{folder}/{name} {Clean(output.property)}.png", output, g.baseColor, surface, maxSize);
                         }
                     }
                     foreach (string property in output.Properties)
@@ -291,9 +370,17 @@ namespace RosDen.Wardrobe.Editor {
             }
         }
 
-        /// <summary>Packs an output's channels from an albedo and a surface map (R metal, G rough, B occlusion, A sheen) into a PNG.</summary>
-        internal static Texture2D WritePacked(WardrobeGarment g, string path, WardrobeMaterialType.Output output, Texture albedo, Texture surface) {
+        /// <summary>
+        /// Packs an output's channels from an albedo and a surface map (R metal, G rough, B occlusion, A sheen) into a PNG,
+        /// at the base colour's size (no bigger than <paramref name="maxSize"/> when it's set).
+        /// </summary>
+        internal static Texture2D WritePacked(WardrobeGarment g, string path, WardrobeMaterialType.Output output, Texture albedo, Texture surface,
+            int maxSize = 0) {
             var size = WardrobeBaker.SourceSize(g.baseColor);
+            if (maxSize > 0 && Mathf.Max(size.x, size.y) > maxSize) {
+                float scale = (float)maxSize / Mathf.Max(size.x, size.y);
+                size = new Vector2Int(Mathf.Max(1, Mathf.RoundToInt(size.x * scale)), Mathf.Max(1, Mathf.RoundToInt(size.y * scale)));
+            }
             bool colour = output.channels.Any(c => c >= WardrobeMaterialType.Source.AlbedoR && c <= WardrobeMaterialType.Source.AlbedoB);
             var rt = RenderTexture.GetTemporary(size.x, size.y, 0, RenderTextureFormat.ARGB32, colour ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
             byte[] png;
@@ -305,23 +392,34 @@ namespace RosDen.Wardrobe.Editor {
             } finally {
                 RenderTexture.ReleaseTemporary(rt);
             }
-            int maxSize = (AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(g.baseColor)) as TextureImporter)?.maxTextureSize ?? 2048;
+            int importSize = maxSize > 0 ? maxSize
+                : (AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(g.baseColor)) as TextureImporter)?.maxTextureSize ?? 2048;
             return WardrobeAssets.WriteTexture(path, png, ti => {
                 ti.textureType = TextureImporterType.Default;
                 ti.sRGBTexture = colour;
                 ti.alphaSource = TextureImporterAlphaSource.FromInput;
                 ti.alphaIsTransparency = false;
-                ti.maxTextureSize = maxSize;
+                ti.maxTextureSize = importSize;
             });
         }
 
         // What the built material depends on: the .rmat, the .rgarm and the textures and template they name.
-        private static string Key(WardrobeGarment g, WardrobeMaterialType type) {
-            var paths = new List<string> { type.path, WardrobeGarments.PathOf(g), AssetDatabase.GetAssetPath(type.template) };
+        // (Shipped: also the map size and the shader the pack has; the .rgarm's own text isn't, as making the material doesn't change it.)
+        private static string Key(WardrobeGarment g, WardrobeMaterialType type, bool shipped = false) {
+            var paths = new List<string> { type.path, shipped ? null : WardrobeGarments.PathOf(g), AssetDatabase.GetAssetPath(type.template) };
             paths.AddRange(new Object[] { g.baseColor, g.normalMap, g.metalness?.texture, g.roughness?.texture, g.occlusion?.texture, g.sheen?.texture, g.opacity?.texture }
                 .Where(o => o != null).Select(AssetDatabase.GetAssetPath));
             var hash = new Hash128();
             hash.Append(2);   // the build itself: bump when it changes
+            if (shipped) {
+                hash.Append(g.mapSize);
+                foreach (var map in new[] { g.metalness, g.roughness, g.occlusion, g.sheen, g.opacity }) {
+                    hash.Append(map?.texture != null ? (int)map.channel : -1);
+                    hash.Append(map?.invert == true ? 1 : 0);
+                    hash.Append(map?.value ?? 0);
+                }
+                hash.Append(AssetDatabase.GetAssetPath(PackShader(g, type.Shader)));
+            }
             foreach (string p in paths.Where(p => !string.IsNullOrEmpty(p)).Distinct()) {
                 hash.Append(p);
                 hash.Append(AssetDatabase.GetAssetDependencyHash(p).ToString());

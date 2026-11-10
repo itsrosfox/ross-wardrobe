@@ -11,7 +11,8 @@ namespace RosDen.Wardrobe.Editor {
     /// Ros' Wardrobe: pick an avatar in the scene and browse the garments fitted to its base (.rgarm files whose avatar is
     /// the base's .ravt), by category. Clicking one puts it on the avatar, taking off whatever is worn in its slot, and
     /// every look change is baked onto it as you make it. That's it: the garment's own setup (VRCFury) attaches it on
-    /// upload. Ctrl+Z undoes either. The Avatar section shapes the avatar's body.
+    /// upload. Ctrl+Z undoes either. The Avatar section shapes the avatar's body. The Setup tab is for creators: it sets up
+    /// garments (fitting them to their avatar, making their shipped material), avatar bases and material types.
     /// </summary>
     public class WardrobeWindow : EditorWindow {
         private const string All = "All", AvatarSection = "Avatar";
@@ -20,10 +21,13 @@ namespace RosDen.Wardrobe.Editor {
         [SerializeField] private GameObject avatar;
         [SerializeField] private WardrobeGarment selected;
         [SerializeField] private string category = All;
+        [SerializeField] private bool setup;
+        [SerializeField] private string setupPath;
 
         private Vector2 _browserScroll, _editorScroll;
         private WardrobeLookPanel _panel;
         private WardrobeAvatarPanel _avatarPanel;
+        private WardrobeSetupPanel _setupPanel;
         private List<WardrobeGarment> _garments;
         private Dictionary<WardrobeGarment, GameObject> _worn = new Dictionary<WardrobeGarment, GameObject>();   // by its root on the avatar
         private readonly Dictionary<WardrobeGarment, bool> _missingScripts = new Dictionary<WardrobeGarment, bool>();
@@ -52,6 +56,7 @@ namespace RosDen.Wardrobe.Editor {
             titleContent = new GUIContent("Ros' Wardrobe", EditorGUIUtility.IconContent("Cloth Icon").image);
             _panel = new WardrobeLookPanel(Repaint);
             _avatarPanel = new WardrobeAvatarPanel();
+            _setupPanel = new WardrobeSetupPanel(Repaint);
             EditorApplication.projectChanged += Reload;
             EditorApplication.hierarchyChanged += HierarchyChanged;
         }
@@ -60,6 +65,7 @@ namespace RosDen.Wardrobe.Editor {
             EditorApplication.projectChanged -= Reload;
             EditorApplication.hierarchyChanged -= HierarchyChanged;
             _panel.Dispose();
+            _setupPanel.Close();
         }
 
         private void OnSelectionChange() {
@@ -100,17 +106,41 @@ namespace RosDen.Wardrobe.Editor {
 
             DrawToolbar();
             using (new EditorGUILayout.HorizontalScope()) {
-                using (new EditorGUILayout.VerticalScope(GUILayout.Width(BrowserWidth))) DrawBrowser();
+                using (new EditorGUILayout.VerticalScope(GUILayout.Width(BrowserWidth))) {
+                    if (setup) _setupPanel.DrawList(BrowserWidth);
+                    else DrawBrowser();
+                }
                 var line = GUILayoutUtility.GetRect(1, 1, GUILayout.Width(1), GUILayout.ExpandHeight(true));
                 EditorGUI.DrawRect(line, new Color(0, 0, 0, 0.25f));
-                using (new EditorGUILayout.VerticalScope()) DrawEditor(position.width - BrowserWidth - 24);
+                using (new EditorGUILayout.VerticalScope()) {
+                    if (setup) DrawSetup();
+                    else DrawEditor(position.width - BrowserWidth - 24);
+                }
             }
+        }
+
+        private void DrawSetup() {
+            _panel.SetTarget(null);
+            if (_setupPanel.Path == null && !string.IsNullOrEmpty(setupPath)) _setupPanel.Open(setupPath);
+            _setupPanel.DrawEditor();
+            setupPath = _setupPanel.Path;
         }
 
         // ---------------------------------------------------------------- toolbar + browser
 
         private void DrawToolbar() {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar)) {
+                bool wardrobe = GUILayout.Toggle(!setup, new GUIContent("Wardrobe", "Dress the avatar and recolour its clothing"), EditorStyles.toolbarButton,
+                    GUILayout.Width(70));
+                bool prepare = GUILayout.Toggle(setup, new GUIContent("Setup", "Prepare garments, avatar bases and material types"), EditorStyles.toolbarButton,
+                    GUILayout.Width(50));
+                if (wardrobe && setup) setup = false;
+                else if (prepare && !setup) setup = true;
+                GUILayout.Space(8);
+                if (setup) {
+                    GUILayout.FlexibleSpace();
+                    return;
+                }
                 GUILayout.Label("Avatar", GUILayout.Width(44));
                 if (_sceneAvatars == null) _sceneAvatars = SceneAvatars();
                 var avatars = _sceneAvatars.Where(a => a != null).ToList();
@@ -418,7 +448,7 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         // The VRChat avatar above t, else the outermost humanoid (a garment's own model can be humanoid too).
-        private static GameObject AvatarRoot(Transform t) {
+        internal static GameObject AvatarRoot(Transform t) {
             GameObject humanoid = null;
             for (; t != null; t = t.parent) {
                 if (t.GetComponent("VRCAvatarDescriptor") != null) return t.gameObject;

@@ -15,6 +15,8 @@ namespace RosDen.Wardrobe.Editor {
         private static readonly string[] SizeNames = { "512", "1024", "2048", "4096" };
         private static readonly GUIContent[] Channels = { new GUIContent("R"), new GUIContent("G"), new GUIContent("B"), new GUIContent("A") };
         private static readonly int[] ChannelValues = { 0, 1, 2, 3 };
+        private static readonly int[] MapSizes = { 0, 512, 1024, 2048, 4096 };
+        private static readonly GUIContent[] MapSizeNames = MapSizes.Select(s => new GUIContent(s == 0 ? "The base colour's" : s.ToString())).ToArray();
         private static int _idSize = 2048, _gradientSize = 2048;
         private static WardrobeGenerators.GradientDirection _direction;
 
@@ -23,6 +25,7 @@ namespace RosDen.Wardrobe.Editor {
         private string _saved, _text, _error;
         private int _dirtyCount = -1, _revision;
         private bool _showMore;
+        private WardrobeFitter.Report _fit;
 
         public WardrobeGarmentForm(string path) : base(path) => Revert();
 
@@ -106,8 +109,13 @@ namespace RosDen.Wardrobe.Editor {
             DrawAvatar(g);
 
             EditorGUILayout.Space();
+            Header("Fit to Avatar");
+            DrawFit(g);
+
+            EditorGUILayout.Space();
             Header("Material");
             DrawMaterial(g);
+            DrawShipped(g);
 
             EditorGUILayout.Space();
             Header("Maps");
@@ -194,6 +202,55 @@ namespace RosDen.Wardrobe.Editor {
             foreach (var t in types.Where(t => t.Problem != null)) EditorGUILayout.HelpBox(t.Problem, MessageType.Warning);
             if (types.Count > 0)
                 Note($"Buyers can pick: {string.Join(", ", types.Where(t => t.Problem == null).Select(t => t.DisplayName))}. Each .rmat lists the garments it's for.");
+        }
+
+        private void DrawFit(WardrobeGarment g) {
+            Note("The garment as your cloth tool exports it (e.g. Marvelous Designer's FBX), rigged to the avatar's skeleton. Fit makes " +
+                 $"'{WardrobeAssets.FileName(WardrobeAssets.BaseName(g))}.asset' next to the .rgarm from it: the mesh the prefab wears, with " +
+                 "the body's shape keys so it follows the body. After a new export, overwrite the file and fit again.");
+            Field("source", "Source Model");
+            _so.ApplyModifiedProperties();
+            string problem = WardrobeFitter.Problem(g);
+            if (problem != null) {
+                EditorGUILayout.HelpBox(problem, MessageType.Info);
+                return;
+            }
+            var avatar = WardrobeAvatars.Get(g.avatarId);
+            var shapes = WardrobeFitter.Shapes(g);
+            Note($"Copies {avatar.DisplayName}'s body shape keys: {(shapes.Count == 0 ? "none" : string.Join(", ", shapes))} " +
+                 "(the avatar base's Fitting garments; without a list, the ones its sliders set).");
+            bool fitted = g.mesh != null && AssetDatabase.GetAssetPath(g.mesh) == WardrobeFitter.FitPath(g);
+            bool upToDate = WardrobeFitter.UpToDate(g);
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.LabelField(upToDate ? "Up to date." : fitted ? "Out of date: the source model or the avatar base changed." : "Not fitted yet.",
+                    EditorStyles.wordWrappedMiniLabel);
+                if (GUILayout.Button(fitted ? "Fit Again" : "Fit to Avatar", GUILayout.Width(100)))
+                    Later($"Fitting {Title(g)} to {avatar.DisplayName}…", () => _fit = WardrobeFitter.Fit(g));
+            }
+            if (_fit == null) return;
+            if (_fit.added.Count > 0) Note("Copied: " + string.Join(", ", _fit.added.Select(a => $"{a.shape} ({a.mm:0.#} mm)")));
+            if (_fit.skipped.Count > 0) Note("Left out: " + string.Join(", ", _fit.skipped.Select(s => $"{s.shape} ({s.why})")));
+            foreach (string note in _fit.notes) Note(note);
+        }
+
+        private void DrawShipped(WardrobeGarment g) {
+            var type = WardrobeMaterialTypes.For(g, g.defaultMaterial);
+            if (type == null) return;
+            EditorGUILayout.Space(2);
+            Note($"The prefab ships in it: Make Material writes '{System.IO.Path.GetFileName(WardrobeMaterialTypes.ShippedPath(g, type))}' next to " +
+                 "the .rgarm from the maps below, packing them the way the type needs, and puts it on the prefab. Keep the maps as your " +
+                 "tools export them.");
+            var size = _so.FindProperty("mapSize");
+            size.intValue = EditorGUILayout.IntPopup(new GUIContent("Packed Map Size", size.tooltip), size.intValue, MapSizeNames, MapSizes);
+            _so.ApplyModifiedProperties();
+            bool made = System.IO.File.Exists(WardrobeMaterialTypes.ShippedPath(g, type));
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.LabelField(!made ? "Not made yet." : WardrobeMaterialTypes.ShippedUpToDate(g, type) ? "Up to date."
+                    : "Out of date: the maps, the size or the material type changed.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUI.DisabledScope(g.baseColor == null))
+                    if (GUILayout.Button(made ? "Make Again" : "Make Material", GUILayout.Width(100)))
+                        Later($"Making {Title(g)}'s material…", () => WardrobeMaterialTypes.Ship(g, type));
+            }
         }
 
         private void DrawMaps(WardrobeGarment g) {
