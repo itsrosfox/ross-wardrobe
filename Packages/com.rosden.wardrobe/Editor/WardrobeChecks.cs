@@ -365,8 +365,9 @@ namespace RosDen.Wardrobe.Editor {
             foreach (string note in notes) add(MessageType.Warning, note);
             var shader = type.Shader;
             if (shader == null) {
-                add(MessageType.Error, type.template == null && type.shaderName.Length == 0 ? "It names no material or shader." :
-                    $"The shader '{type.shaderName}' isn't in this project. Install it (e.g. through VCC), or pick another.");
+                // a type for a shader the project doesn't have is just not offered (packs ship types for shaders buyers may not use)
+                if (type.template == null && type.shaderName.Length == 0) add(MessageType.Error, "It names no material or shader.");
+                else add(MessageType.Info, $"It isn't offered: the shader '{type.shaderName}' isn't in this project. Install it (e.g. through VCC) to use it.");
                 return;
             }
             if (type.outputs.All(o => !o.albedo))
