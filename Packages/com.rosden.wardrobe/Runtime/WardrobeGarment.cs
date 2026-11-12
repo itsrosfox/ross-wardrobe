@@ -21,8 +21,8 @@ namespace RosDen.Wardrobe {
         [Tooltip("Where it's worn, e.g. Top. Putting a garment on takes off the one in the same slot; empty = never swapped")]
         public string slot;
 
-        [Tooltip("Shape keys on the avatar's body that hide what this garment covers (e.g. TShirt). Its own setup (VRCFury) " +
-                 "sets them in-game; editor tools read them here")]
+        [Tooltip("Shape keys on the avatar's body that hide what this garment covers (e.g. TShirt). Suggestions only: " +
+                 "Ros' Wardrobe lists them in its Avatar section while the garment is worn, and only you turn them on")]
         public List<string> bodyHides = new List<string>();
 
         public string version = "1.0.0";
@@ -47,6 +47,11 @@ namespace RosDen.Wardrobe {
         [Tooltip("Mesh the prefab wears (Fit to Avatar makes it from the source, with the body's shape keys), the ID and " +
                  "gradient maps are made from, and thumbnails are rendered with")]
         public Mesh mesh;
+
+        [Tooltip("The garment simulated again with the body in other shapes (body shape keys at weights). Fit to Avatar makes " +
+                 "the garment's shape keys from these: in-betweens for one key, correctives for several. Keys without one " +
+                 "follow the body")]
+        public List<WardrobeSim> sims = new List<WardrobeSim>();
 
         [Tooltip("Material type (.rmat id) the garment starts in; empty = the first that fits")]
         public string defaultMaterial;

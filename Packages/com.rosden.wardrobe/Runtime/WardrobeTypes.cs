@@ -32,6 +32,59 @@ namespace RosDen.Wardrobe {
         public MapChannel(float value) => this.value = value;
     }
 
+    /// <summary>One body shape key at a weight (0..100).</summary>
+    [Serializable]
+    public class WardrobeShapeWeight {
+        public string shape;
+        [Range(0, 100)] public float weight = 100;
+    }
+
+    /// <summary>
+    /// The garment simulated again, with the body in another shape: the body shape keys at the weights listed. The cloth
+    /// tool's export of it must be the garment's source mesh moved (the same vertices, in the same order). Fit to Avatar
+    /// makes the garment's shape keys from these instead of following the body:
+    /// - one shape key: a frame of the garment's shape key of that name at that weight (several: in-betweens, a 1D blend);
+    /// - several: a corrective, what the one-key shapes at those weights miss, on a garment shape key named by
+    ///   <see cref="ComboName"/> and set to the product of the keys' weights over these (2D and more: bilinear).
+    /// </summary>
+    [Serializable]
+    public class WardrobeSim {
+        [Tooltip("The cloth tool's export of the garment, simulated on the body in this shape")]
+        public GameObject source;
+        [Tooltip("The body shape keys it was simulated at, and their weights")]
+        public List<WardrobeShapeWeight> shapes = new List<WardrobeShapeWeight>();
+
+        /// <summary>A corrective's shape key name: "breasts+Buff" (every key at 100) or "breasts@100+Buff@50".</summary>
+        public static string ComboName(IEnumerable<WardrobeShapeWeight> shapes) {
+            var list = shapes.ToList();
+            bool full = list.All(s => Mathf.Approximately(s.weight, 100));
+            return string.Join("+", list.Select(s => full ? s.shape : $"{s.shape}@{s.weight:0.##}"));
+        }
+
+        /// <summary>The keys and weights a corrective's name stands for, or null when it isn't one.</summary>
+        public static List<WardrobeShapeWeight> ParseCombo(string name) {
+            if (string.IsNullOrEmpty(name) || !name.Contains("+")) return null;
+            var result = new List<WardrobeShapeWeight>();
+            foreach (string part in name.Split('+')) {
+                int at = part.LastIndexOf('@');
+                float w = 100;
+                if (at >= 0 && !float.TryParse(part.Substring(at + 1), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out w)) return null;
+                string shape = at >= 0 ? part.Substring(0, at) : part;
+                if (shape.Length == 0 || w <= 0) return null;
+                result.Add(new WardrobeShapeWeight { shape = shape, weight = w });
+            }
+            return result.Count >= 2 ? result : null;
+        }
+
+        /// <summary>A corrective's weight (0..100) for the body's weights of its keys: the product of each over its sim's.</summary>
+        public static float ComboWeight(List<WardrobeShapeWeight> combo, Func<string, float> bodyWeight) {
+            float w = 1;
+            foreach (var s in combo) w *= Mathf.Clamp01(bodyWeight(s.shape) / s.weight);
+            return w * 100;
+        }
+    }
+
     /// <summary>A named group of parts (ID map colours) that is recoloured together, e.g. "Body" or "Collar".</summary>
     [Serializable]
     public class WardrobeRegion {

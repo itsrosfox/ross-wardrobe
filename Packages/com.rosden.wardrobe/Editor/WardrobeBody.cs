@@ -119,12 +119,21 @@ namespace RosDen.Wardrobe.Editor {
                 var mesh = skin.sharedMesh;
                 if (mesh == null || skin == body) continue;
                 bool recorded = false;
+                float BodyWeight(string shape) {
+                    int j = body.sharedMesh.GetBlendShapeIndex(shape);
+                    return j >= 0 ? body.GetBlendShapeWeight(j) : 0;
+                }
                 for (int i = 0; i < mesh.blendShapeCount; i++) {
-                    int j = body.sharedMesh.GetBlendShapeIndex(mesh.GetBlendShapeName(i));
-                    if (j < 0 || Mathf.Approximately(skin.GetBlendShapeWeight(i), body.GetBlendShapeWeight(j))) continue;
+                    string name = mesh.GetBlendShapeName(i);
+                    float weight;
+                    if (body.sharedMesh.GetBlendShapeIndex(name) >= 0) weight = BodyWeight(name);
+                    // a corrective (several body keys: the product of their weights over its sim's, see WardrobeSim)
+                    else if (WardrobeSim.ParseCombo(name) is List<WardrobeShapeWeight> combo) weight = WardrobeSim.ComboWeight(combo, BodyWeight);
+                    else continue;
+                    if (Mathf.Approximately(skin.GetBlendShapeWeight(i), weight)) continue;
                     if (!recorded && undo) Undo.RecordObject(skin, "Body Shape");
                     recorded = true;
-                    skin.SetBlendShapeWeight(i, body.GetBlendShapeWeight(j));
+                    skin.SetBlendShapeWeight(i, weight);
                 }
                 if (recorded && !undo) {
                     if (PrefabUtility.IsPartOfPrefabInstance(skin)) PrefabUtility.RecordPrefabInstancePropertyModifications(skin);
@@ -132,7 +141,26 @@ namespace RosDen.Wardrobe.Editor {
                 }
                 changed |= recorded;
             }
+            WardrobeClearance.Schedule(avatar);   // then moves the cloth out where it still clips
             return changed;
+        }
+
+        // ---------------------------------------------------------------- body hides
+
+        /// <summary>
+        /// The body shape keys the worn garments suggest hiding (their bodyHides that the body has), each with the garments
+        /// that suggest it. Nothing ever sets these by itself: the Avatar section lists them, and the user turns them on.
+        /// </summary>
+        public static List<(string shape, List<string> garments)> SuggestedHides(GameObject avatar) {
+            var body = BodyOf(avatar, WardrobeAvatars.Match(avatar));
+            if (body == null || body.sharedMesh == null) return new List<(string, List<string>)>();
+            return avatar.GetComponentsInChildren<WardrobeRecolor>(true).Where(rc => rc.garment != null)
+                .SelectMany(rc => (rc.garment.bodyHides ?? new List<string>()).Where(h => !string.IsNullOrWhiteSpace(h))
+                    .Select(h => (shape: h.Trim(), garment: string.IsNullOrWhiteSpace(rc.garment.displayName)
+                        ? WardrobeAssets.BaseName(rc.garment) : rc.garment.displayName)))
+                .Where(p => body.sharedMesh.GetBlendShapeIndex(p.shape) >= 0)
+                .GroupBy(p => p.shape)
+                .Select(grp => (grp.Key, grp.Select(p => p.garment).Distinct().ToList())).ToList();
         }
 
         // A garment's shape key weights are the scene's: unsaved, or saved before the body or the garment's fit changed,

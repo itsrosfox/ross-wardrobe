@@ -46,7 +46,16 @@ The same editor also shows in the Inspector when you select a worn garment.
 
 The **Avatar** section (first in the list) shapes the avatar's body: the base's sliders by group (Body, Head,
 Tail…), toggles and choices (e.g. ears) from its `.ravt`, and every other shape key of the body under *Other shape
-keys*. Worn garments follow the body's shape keys of the same names.
+keys*. Worn garments follow the body's shape keys of the same names. Ros' Wardrobe never changes the body's shape keys
+by itself: the shape keys a worn garment suggests hiding under it (e.g. fluff) are listed under *Suggested Hides*, and
+only change when you turn them on there. What's set here is what the avatar has in-game.
+
+**Clearance** (*Fix clipping*, on by default) is the last step of fitting, on your avatar: after the body or what's
+worn changes (and before a VRChat build), every worn garment is checked against the body as it is (without what's
+hidden on it), and wherever the body still comes through the cloth, the cloth is moved out (with its layers,
+buttons and stitching). That's one more shape key, *Wardrobe Clearance* at 100, on a copy of the garment's mesh kept
+under `Wardrobe Recolors/<Avatar base>/<Garment>/` (one per scene and avatar); without clipping the garment wears its
+own mesh. It's made for the body as you set it: shapes the avatar's menu animates in-game aren't cleared.
 
 These only change the avatar in the editor. In-game its own menu can still change what it animates.
 
@@ -72,6 +81,16 @@ A garment is one `.rgarm` per avatar fit:
    key garments follow (so it changes shape with the body sliders), and with weights on bones it shouldn't follow
    (the tail, say) moved to the bone the `.ravt` names. It becomes the garment's mesh and the prefab wears it.
    Fitting again overwrites it in place.
+
+   **Body shapes** lists each body shape key the garment follows. Without anything more, the garment follows the
+   body surface under it with each key. For a better fit (big shapes like breasts or a belly, where cloth has to
+   drape and not just move with the skin), give a key the garment as your cloth tool exports it with that key on the
+   body at 100: the same garment simulated again (Marvelous Designer: Avatar → Blend Shape), the same mesh, vertices
+   unchanged. Its movement from the Source Model becomes the garment's shape key, a linear delta, so keys on at once
+   add up. *Another Key* adds a body shape key the base doesn't list, with its export. What's still clipping on an
+   avatar after that, the Avatar section's Clearance fixes. (In the `.rgarm`: `sims`, each a `source` and the
+   `shapes` it was made with, `{ "breasts": 100 }`; an export at 50 as well is an in-between, and one with several
+   keys on is a corrective for that mix.)
 3. **Material**: which material type (`.rmat`) it starts in. Buyers can pick any type that fits it. *Make
    Material* writes `<Garment> (<Type>).mat` next to the `.rgarm` from the maps, packing them into the textures
    the type wants (at most *Packed Map Size*), and puts it on the prefab, so the garment ships in it. It uses the
@@ -95,8 +114,9 @@ The generated maps and presets are editor-only data and aren't included in avata
 All of them are json with a stable `id`. Paths in them are relative to the file.
 
 - **.rgarm**: a garment fit, as above (`avatar` is `{ "id", "version" }`, `material` the `.rmat` id it starts in,
-  `maps` its textures and channels, `bodyHides` the body shape keys it sets in-game to hide skin under it, which the
-  Avatar section leaves alone).
+  `maps` its textures and channels, `bodyHides` the body shape keys that hide skin under it: suggestions only, which
+  the Avatar section lists while the garment is worn for you to turn on. Neither the window nor the garment's own setup
+  changes the body.
 - **.ravt**: an avatar base: `name`, the `guids` of its model and prefabs, and `matches`, words in an avatar's
   name or model that mean it's built on this base (for copies the guids don't catch). Optionally, for the Avatar
   section:

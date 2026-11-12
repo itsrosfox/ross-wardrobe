@@ -110,6 +110,15 @@ namespace RosDen.Wardrobe.Editor {
             g.thumbnail = Ref<Texture2D>(j, "thumbnail");
             g.source = Ref<GameObject>(j, "source");
             g.mesh = Ref<Mesh>(j, "mesh");
+            // "sims": [ { "source": "<fbx>", "shapes": { "<body shape key>": <weight>, ... } }, ... ]
+            g.sims = j.Objects("sims").Select(s => {
+                var shapes = s.Object("shapes");
+                return new WardrobeSim {
+                    source = Ref<GameObject>(s, "source"),
+                    shapes = (shapes?.Keys ?? new List<string>()).Where(k => k.Trim().Length > 0)
+                        .Select(k => new WardrobeShapeWeight { shape = k.Trim(), weight = (float)shapes.Number(k, 100) }).ToList(),
+                };
+            }).ToList();
             g.defaultMaterial = j.String("material");
 
             var maps = j.Object("maps");
@@ -187,6 +196,16 @@ namespace RosDen.Wardrobe.Editor {
             if (g.source != null) j["source"] = Ref(g.source);
             else j.Remove("source");
             j["mesh"] = Ref(g.mesh);
+            var sims = (g.sims ?? new List<WardrobeSim>()).Where(s => s != null && (s.source != null || s.shapes.Count > 0)).Select(s => {
+                var o = new JsonObject();
+                o["source"] = Ref(s.source);
+                var shapes = new JsonObject();
+                foreach (var w in s.shapes.Where(w => !string.IsNullOrWhiteSpace(w.shape))) shapes[w.shape.Trim()] = Math.Round(w.weight, 3);
+                o["shapes"] = shapes;
+                return (object)o;
+            }).ToList();
+            if (sims.Count > 0) j["sims"] = sims;
+            else j.Remove("sims");
             j["material"] = g.defaultMaterial ?? "";
 
             var maps = j.Object("maps") ?? new JsonObject();

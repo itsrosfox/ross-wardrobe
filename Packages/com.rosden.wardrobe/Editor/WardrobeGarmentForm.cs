@@ -26,6 +26,7 @@ namespace RosDen.Wardrobe.Editor {
         private int _dirtyCount = -1, _revision;
         private bool _showMore;
         private WardrobeFitter.Report _fit;
+        private string _newShape;
 
         public WardrobeGarmentForm(string path) : base(path) => Revert();
 
@@ -216,9 +217,7 @@ namespace RosDen.Wardrobe.Editor {
                 return;
             }
             var avatar = WardrobeAvatars.Get(g.avatarId);
-            var shapes = WardrobeFitter.Shapes(g);
-            Note($"Copies {avatar.DisplayName}'s body shape keys: {(shapes.Count == 0 ? "none" : string.Join(", ", shapes))} " +
-                 "(the avatar base's Fitting garments; without a list, the ones its sliders set).");
+            DrawShapes(g, avatar);
             bool fitted = g.mesh != null && AssetDatabase.GetAssetPath(g.mesh) == WardrobeFitter.FitPath(g);
             bool upToDate = WardrobeFitter.UpToDate(g);
             using (new EditorGUILayout.HorizontalScope()) {
@@ -231,6 +230,68 @@ namespace RosDen.Wardrobe.Editor {
             if (_fit.added.Count > 0) Note("Copied: " + string.Join(", ", _fit.added.Select(a => $"{a.shape} ({a.mm:0.#} mm)")));
             if (_fit.skipped.Count > 0) Note("Left out: " + string.Join(", ", _fit.skipped.Select(s => $"{s.shape} ({s.why})")));
             foreach (string note in _fit.notes) Note(note);
+        }
+
+        // Body shapes: each body shape key the garment follows, and the cloth tool's export made with the body in it. The
+        // export's movement from the Source Model is the garment's shape key at 100: a linear delta, so several keys on at
+        // once add up. Without one the garment follows the body surface under it. Either way, Ros' Wardrobe's clearance
+        // pass moves out what still clips on the avatar it's worn on.
+        private void DrawShapes(WardrobeGarment g, WardrobeAvatar avatar) {
+            var shapes = WardrobeFitter.Shapes(g);
+            var body = WardrobeFitter.BodyShapes(g);
+            Note($"Body shapes: the garment gets a shape key for each of {avatar.DisplayName}'s body shape keys below, so it changes shape " +
+                 "with the body. For a better fit, give a key the garment as your cloth tool exports it with that key on the body at 100 " +
+                 "(the same garment simulated again, e.g. Marvelous Designer's Avatar → Blend Shape): its movement from the Source Model " +
+                 "becomes the key, and keys on at once add up. Without an export the garment follows the body surface under it.");
+            EditorGUI.indentLevel++;
+            if (shapes.Count == 0) Note("None: the avatar base's Fitting garments list (or its sliders) names no body shape keys.");
+            foreach (string shape in shapes) {
+                var own = g.sims?.Where(s => s != null && s.shapes.Count == 1 && s.shapes[0].shape == shape).OrderBy(s => s.shapes[0].weight).ToList()
+                          ?? new List<WardrobeSim>();
+                var main = own.FirstOrDefault(s => Mathf.Approximately(s.shapes[0].weight, 100)) ?? own.LastOrDefault();
+                bool onBody = body.Count == 0 || body.Contains(shape);
+                using (new EditorGUILayout.HorizontalScope()) {
+                    EditorGUI.BeginChangeCheck();
+                    var picked = EditorGUILayout.ObjectField(new GUIContent(shape, "The cloth tool's export of the garment with this body shape key at " +
+                        $"{(main != null ? main.shapes[0].weight : 100):0.##}. Empty: the garment follows the body."), main?.source, typeof(GameObject), false) as GameObject;
+                    if (EditorGUI.EndChangeCheck()) SetExport(g, shape, main, picked);
+                    EditorGUILayout.LabelField(!onBody ? "not on the body" : main?.source != null ? "from the export" : "follows the body",
+                        EditorStyles.miniLabel, GUILayout.Width(92));
+                }
+                if (main?.source != null && main.source.GetComponentInChildren<SkinnedMeshRenderer>(true) == null)
+                    EditorGUILayout.HelpBox($"{main.source.name} has no skinned mesh: export it rigged to the avatar's skeleton, as the Source Model.", MessageType.Warning);
+                foreach (var other in own.Where(s => s != main && s.source != null))
+                    Note($"In-between at {other.shapes[0].weight:0.##}: {other.source.name}");
+            }
+            // correctives: exports with several body keys on (what the keys on their own miss of it)
+            foreach (var combo in g.sims?.Where(s => s != null && s.shapes.Count > 1 && s.source != null) ?? Enumerable.Empty<WardrobeSim>())
+                Note($"Corrective {WardrobeSim.ComboName(combo.shapes)}: {combo.source.name}");
+
+            // another body shape key, with its export
+            var more = body.Where(s => !shapes.Contains(s) && !g.bodyHides.Contains(s)).ToList();
+            if (more.Count > 0)
+                using (new EditorGUILayout.HorizontalScope()) {
+                    int index = Mathf.Max(0, more.IndexOf(_newShape));
+                    index = EditorGUILayout.Popup(new GUIContent("Another Key", "Another body shape key to follow, with the cloth tool's export " +
+                        "made with it on the body at 100"), index, more.Select(s => s.Replace("/", "∕")).ToArray());
+                    _newShape = more[index];
+                    var picked = EditorGUILayout.ObjectField(null, typeof(GameObject), false, GUILayout.Width(150)) as GameObject;
+                    if (picked != null) SetExport(g, _newShape, null, picked);
+                }
+            EditorGUI.indentLevel--;
+        }
+
+        private void SetExport(WardrobeGarment g, string shape, WardrobeSim sim, GameObject export) {
+            Changing(g, "Body Shape Export");
+            g.sims ??= new List<WardrobeSim>();
+            if (export == null) {
+                if (sim != null) g.sims.Remove(sim);
+            } else if (sim == null) {
+                g.sims.Add(new WardrobeSim { source = export, shapes = { new WardrobeShapeWeight { shape = shape, weight = 100 } } });
+            } else {
+                sim.source = export;
+            }
+            Changed(g);
         }
 
         private void DrawShipped(WardrobeGarment g) {

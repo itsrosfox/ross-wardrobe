@@ -317,6 +317,7 @@ namespace RosDen.Wardrobe.Editor {
                     Debug.LogWarning($"[Ros' Wardrobe] {old.name} is part of the avatar's prefab, so it stays on; remove it there.");
                 }
             }
+            // The body's shape keys stay as they are: hides the garment suggests are offered in the Avatar section.
             Undo.SetCurrentGroupName("Put On " + DisplayName(g));
             Undo.CollapseUndoOperations(group);
             ShowNotification(new GUIContent($"{DisplayName(g)} is on {avatar.name}"));

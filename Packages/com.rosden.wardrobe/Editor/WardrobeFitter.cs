@@ -20,7 +20,7 @@ namespace RosDen.Wardrobe.Editor {
     /// and everything else that uses it keep working.
     /// </summary>
     public static class WardrobeFitter {
-        private const int Build = 11;               // the fit itself: bump when it changes, so older fits show as out of date
+        private const int Build = 12;               // the fit itself: bump when it changes, so older fits show as out of date
         private const float MinMovement = 0.0005f;  // metres; a shape key that moves the garment less isn't copied
         private const float Falloff = 4, Near = 0.002f, Band = 0.01f, Cell = 0.02f;
         private const int MaxReach = 25;            // cells searched around a vertex for the body (50 cm)
@@ -56,11 +56,25 @@ namespace RosDen.Wardrobe.Editor {
             return null;
         }
 
-        /// <summary>The shape keys a fit copies onto the garment: the base's, without the ones the garment sets to hide the body.</summary>
+        /// <summary>
+        /// The shape keys a fit copies onto the garment: the base's, and any other body shape key the garment has an export
+        /// for (<see cref="WardrobeGarment.sims"/>), without the ones the garment sets to hide the body.
+        /// </summary>
         public static List<string> Shapes(WardrobeGarment g) {
             var avatar = WardrobeAvatars.Get(g.avatarId);
             if (avatar == null) return new List<string>();
-            return avatar.FitShapes.Where(s => !g.bodyHides.Contains(s)).ToList();
+            var list = avatar.FitShapes.Where(s => !g.bodyHides.Contains(s)).ToList();
+            foreach (var sim in g.sims ?? new List<WardrobeSim>())
+            foreach (var s in sim?.shapes ?? new List<WardrobeShapeWeight>())
+                if (!string.IsNullOrWhiteSpace(s.shape) && !list.Contains(s.shape) && !g.bodyHides.Contains(s.shape)) list.Add(s.shape);
+            return list;
+        }
+
+        /// <summary>The body's shape keys (of the avatar base the garment is for), or none.</summary>
+        public static List<string> BodyShapes(WardrobeGarment g) {
+            var avatar = WardrobeAvatars.Get(g.avatarId);
+            var mesh = avatar?.Model?.transform.Find(avatar.body)?.GetComponent<SkinnedMeshRenderer>()?.sharedMesh;
+            return mesh == null ? new List<string>() : Enumerable.Range(0, mesh.blendShapeCount).Select(mesh.GetBlendShapeName).ToList();
         }
 
         /// <summary>Whether the garment's mesh is a fit of its source as the source and the avatar are now.</summary>
@@ -104,6 +118,8 @@ namespace RosDen.Wardrobe.Editor {
             importer.userData = Key(g);
             importer.SaveAndReimport();
             fit = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+            Refresh(fit);
+            WardrobeClearance.ScheduleAll();   // what worn copies cleared was of the old fit
 
             var old = g.mesh;
             g.mesh = fit;
@@ -167,10 +183,12 @@ namespace RosDen.Wardrobe.Editor {
             var bodyVertices = bodyMesh.vertices;
             var rest = new Vector3[bodyVertices.Length];
             for (int v = 0; v < rest.Length; v++) rest[v] = bodySkin[v].MultiplyPoint3x4(bodyVertices[v]);
-            var triangles = bodyMesh.triangles;
+            // the body's faces the garment's hides collapse (fluff, hair: hidden while it's worn) don't hold the cloth: it was
+            // made without them, and they don't move with the body's shape keys
+            var triangles = Shown(bodyMesh, g.bodyHides, report);
 
-            // the body is cleared without the garment's body hides: the editor doesn't put them on (only the avatar's
-            // setup does, in-game), and the cloth has to look right in both
+            // otherwise the body is cleared without the garment's body hides: Ros' Wardrobe puts them on the body when it
+            // puts the garment on, but they can be turned off by hand, and the cloth has to look right either way
             var inverse = garmentSkin.Select(m => m.inverse).ToArray();
 
             // what's layered over what at rest, kept so through every movement: outward is away from the body under each vertex
@@ -216,16 +234,103 @@ namespace RosDen.Wardrobe.Editor {
                 probe.ClearBlendShapes();
                 probe.RecalculateNormals();
                 var baseNormals = probe.normals;
+
+                // a shape (the garment's movement, world space) as a frame of the garment's shape key
+                void AddFrame(string name, float weight, Vector3[] total) {
+                    var dv = new Vector3[garment.Length];
+                    for (int v = 0; v < garment.Length; v++) dv[v] = inverse[v].MultiplyVector(total[v]);
+                    var shaped = new Vector3[garmentVertices.Length];
+                    for (int v = 0; v < shaped.Length; v++) shaped[v] = garmentVertices[v] + dv[v];
+                    probe.vertices = shaped;
+                    probe.RecalculateNormals();
+                    var normals = probe.normals;
+                    var dn = new Vector3[normals.Length];
+                    for (int v = 0; v < dn.Length; v++) dn[v] = normals[v] - baseNormals[v];
+                    fit.AddBlendShapeFrame(name, weight, dv, dn, null);
+                }
+                float Furthest(Vector3[] total) => total.Length == 0 ? 0 : total.Max(t => t.magnitude);
+
+                // the body with its shape keys at these weights (0..100)
+                var bodyDeltas = new Dictionary<string, (Vector3[] delta, float weight)>();
+                Vector3[] BodyAt(IEnumerable<WardrobeShapeWeight> at) {
+                    var offset = new Vector3[bodyVertices.Length];
+                    foreach (var s in at) {
+                        if (!bodyDeltas.TryGetValue(s.shape, out var d)) {
+                            int index = bodyMesh.GetBlendShapeIndex(s.shape);
+                            if (index < 0) continue;
+                            int frame = bodyMesh.GetBlendShapeFrameCount(index) - 1;
+                            var delta = new Vector3[bodyMesh.vertexCount];
+                            bodyMesh.GetBlendShapeFrameVertices(index, frame, delta, null, null);
+                            bodyDeltas[s.shape] = d = (delta, bodyMesh.GetBlendShapeFrameWeight(index, frame));
+                        }
+                        float k = s.weight / d.weight;
+                        for (int v = 0; v < offset.Length; v++) offset[v] += d.delta[v] * k;
+                    }
+                    var moved = new Vector3[bodyVertices.Length];
+                    for (int v = 0; v < moved.Length; v++) moved[v] = bodySkin[v].MultiplyPoint3x4(bodyVertices[v] + offset[v]);
+                    return moved;
+                }
+
+                // the garment's movement to a sim (the cloth tool's shape), off the body in that shape where it's through
+                Vector3[] SimShape(WardrobeSim sim, Vector3[] simWorld, string label) {
+                    var moved = BodyAt(sim.shapes);
+                    var push = Clear(simWorld, clothTriangles, loose, moved, triangles, out float most, out int pushed);
+                    if (pushed > 0) report.notes.Add($"{label}: {pushed} vertices of the sim moved off the body (up to {most * 1000:0.#} mm).");
+                    var total = new Vector3[garment.Length];
+                    for (int v = 0; v < garment.Length; v++) total[v] = simWorld[v] - garment[v] + push[v];
+                    // the loose parts (stitching, buttons) ride on the sim's cloth as rigid pieces
+                    Rigid(garment, total, clothTriangles, part, anchors, behind);
+                    return total;
+                }
+
+                // the sims: the cloth tool's exports with the body in other shapes
+                var sims = new List<(WardrobeSim sim, Vector3[] world)>();
+                foreach (var sim in g.sims ?? new List<WardrobeSim>()) {
+                    if (sim?.source == null || sim.shapes.Count == 0) continue;
+                    string label = $"sim {WardrobeSim.ComboName(sim.shapes)} ({sim.source.name})";
+                    var missing = sim.shapes.Where(s => !shapes.Contains(s.shape) || bodyMesh.GetBlendShapeIndex(s.shape) < 0).Select(s => s.shape).ToList();
+                    if (missing.Count > 0) {
+                        report.skipped.Add((label, $"{string.Join(", ", missing)} isn't a body shape key it follows (on the body, not one of its body hides)"));
+                        continue;
+                    }
+                    var world = SimWorld(sim, source, garment, loose, label, report);
+                    if (world != null) sims.Add((sim, world));
+                }
+
+                // each shape key's frames (weight, world movement): from its one-key sims, or by following the body
+                var frames = new Dictionary<string, List<(float weight, Vector3[] total)>>();
                 foreach (string shape in shapes) {
+                    var own = sims.Where(s => s.sim.shapes.Count == 1 && s.sim.shapes[0].shape == shape)
+                        .OrderBy(s => s.sim.shapes[0].weight).ToList();
+                    if (own.Count == 0) continue;
+                    var list = new List<(float, Vector3[])>();
+                    foreach (var (sim, world) in own) {
+                        float w = sim.shapes[0].weight;
+                        if (list.Count > 0 && Mathf.Approximately(list[list.Count - 1].Item1, w)) {
+                            report.skipped.Add(($"sim {shape}@{w:0.##} ({sim.source.name})", "another sim has the same weight"));
+                            continue;
+                        }
+                        list.Add((w, SimShape(sim, world, $"{shape}@{w:0.##}")));
+                    }
+                    // the shape key ends at 100: past the last sim it goes on as from 0 to it
+                    var (lastWeight, lastTotal) = list[list.Count - 1];
+                    if (lastWeight < 100) {
+                        list.Add((100, lastTotal.Select(t => t * (100 / lastWeight)).ToArray()));
+                        report.notes.Add($"{shape}: its last sim is at {lastWeight:0.##}; past it the cloth goes on in the same direction to 100.");
+                    }
+                    frames[shape] = list;
+                    foreach (var (w, total) in list) AddFrame(shape, w, total);
+                    report.added.Add(($"{shape} (from {own.Count} sim{(own.Count > 1 ? "s" : "")})", Furthest(list[list.Count - 1].Item2) * 1000));
+                }
+
+                foreach (string shape in shapes) {
+                    if (frames.ContainsKey(shape)) continue;
                     int index = bodyMesh.GetBlendShapeIndex(shape);
                     if (index < 0) {
                         report.skipped.Add((shape, "not on the body"));
                         continue;
                     }
-                    var delta = new Vector3[bodyMesh.vertexCount];
-                    bodyMesh.GetBlendShapeFrameVertices(index, bodyMesh.GetBlendShapeFrameCount(index) - 1, delta, null, null);
-                    var moved = new Vector3[rest.Length];
-                    for (int v = 0; v < moved.Length; v++) moved[v] = bodySkin[v].MultiplyPoint3x4(bodyVertices[v] + delta[v]);
+                    var moved = BodyAt(new[] { new WardrobeShapeWeight { shape = shape, weight = 100 } });
                     var movedNormals = FaceNormals(moved, triangles);
 
                     var world = new Vector3[garment.Length];
@@ -236,36 +341,201 @@ namespace RosDen.Wardrobe.Editor {
                     }
                     var push = Clear(shapedWorld, clothTriangles, loose, moved, triangles, out float most, out int pushed);
                     if (pushed > 0) report.notes.Add($"{shape}: {pushed} vertices moved off the body (up to {most * 1000:0.#} mm).");
-                    var dv = new Vector3[garment.Length];
                     var total = new Vector3[garment.Length];
                     for (int v = 0; v < garment.Length; v++) total[v] = world[v] + push[v];
                     int kept = Keep(garment, total, clothTriangles, layers);
                     if (kept > 0) report.notes.Add($"{shape}: {kept} layer overlaps moved apart.");
                     Rigid(garment, total, clothTriangles, part, anchors, behind);
-                    float furthest = 0;
-                    for (int v = 0; v < garment.Length; v++) {
-                        furthest = Mathf.Max(furthest, total[v].magnitude);
-                        dv[v] = inverse[v].MultiplyVector(total[v]);
-                    }
+                    float furthest = Furthest(total);
+                    frames[shape] = new List<(float, Vector3[])> { (100, total) };   // what correctives build on, even if too small to keep
                     if (furthest < MinMovement) {
                         report.skipped.Add((shape, $"moves it {furthest * 1000:0.##} mm"));
                         continue;
                     }
-                    var shaped = new Vector3[garmentVertices.Length];
-                    for (int v = 0; v < shaped.Length; v++) shaped[v] = garmentVertices[v] + dv[v];
-                    probe.vertices = shaped;
-                    probe.RecalculateNormals();
-                    var normals = probe.normals;
-                    var dn = new Vector3[normals.Length];
-                    for (int v = 0; v < dn.Length; v++) dn[v] = normals[v] - baseNormals[v];
-                    fit.AddBlendShapeFrame(shape, 100, dv, dn, null);
+                    AddFrame(shape, 100, total);
                     report.added.Add((shape, furthest * 1000));
+                }
+
+                // correctives: what the one-key shapes at a multi-key sim's weights miss of it, on a shape key set to the
+                // product of the keys' weights over the sim's (Ros' Wardrobe sets it in the editor: WardrobeBody.Follow)
+                Vector3[] At(string shape, float weight) {
+                    var result = new Vector3[garment.Length];
+                    if (!frames.TryGetValue(shape, out var list) || weight <= 0) return result;
+                    float w0 = 0;
+                    Vector3[] t0 = result;
+                    foreach (var (w1, t1) in list) {
+                        if (weight <= w1) {
+                            float k = (weight - w0) / (w1 - w0);
+                            for (int v = 0; v < result.Length; v++) result[v] = Vector3.LerpUnclamped(t0[v], t1[v], k);
+                            return result;
+                        }
+                        (w0, t0) = (w1, t1);
+                    }
+                    return (Vector3[])t0.Clone();
+                }
+                var combos = new HashSet<string>();
+                foreach (var (sim, world) in sims.Where(s => s.sim.shapes.Count > 1)) {
+                    string name = WardrobeSim.ComboName(sim.shapes);
+                    if (!combos.Add(name)) {
+                        report.skipped.Add(($"sim {name} ({sim.source.name})", "another sim has the same shape keys and weights"));
+                        continue;
+                    }
+                    var total = SimShape(sim, world, name);
+                    foreach (var s in sim.shapes) {
+                        var single = At(s.shape, s.weight);
+                        for (int v = 0; v < total.Length; v++) total[v] -= single[v];
+                    }
+                    AddFrame(name, 100, total);
+                    report.added.Add(($"{name} (corrective)", Furthest(total) * 1000));
                 }
             } finally {
                 Object.DestroyImmediate(probe);
             }
             fit.RecalculateBounds();
             return fit;
+        }
+
+        // ---------------------------------------------------------------- for the clearance pass (WardrobeClearance)
+
+        // The clearance pass fixes what's left, a little further than a fit pushes out, in more passes. It looks no deeper
+        // than a fit (ClearBehind): body further under the cloth is fur volume or a tight fold (a collar round the neck),
+        // and pushing the cloth out of that balloons it.
+        private const float PassBehind = ClearBehind, PassPush = 0.012f;
+        private const int PassPasses = 4;
+
+        /// <summary>
+        /// How far each of a worn garment's vertices (world space) moves so the body (world space, the triangles given) stays
+        /// <see cref="Clearance"/> under the cloth: the cloth pushed out where the body is through or too close, its layers
+        /// kept in order and its loose parts (buttons, stitching) carried along as rigid pieces.
+        /// </summary>
+        internal static Vector3[] ClearancePush(Vector3[] garment, int[] clothTris, Vector3[] body, int[] bodyTris, out float most, out int moved) {
+            var part = LooseParts(garment, clothTris);
+            var loose = part.Select(k => k >= 0).ToArray();
+            var push = Clear(garment, clothTris, loose, body, bodyTris, out most, out moved, PassBehind, PassPush, PassPasses);
+            if (moved == 0) return push;
+            // outward (away from the body) at each cloth vertex; a loose part's is the cloth's under it
+            var clothOnly = Enumerable.Range(0, garment.Length).Where(v => !loose[v]).ToArray();
+            var holds = Bind(clothOnly.Select(v => garment[v]).ToArray(), body, bodyTris);
+            var outward = new Vector3[garment.Length];
+            for (int i = 0; i < clothOnly.Length; i++)
+                foreach (var h in holds[i]) outward[clothOnly[i]] += h.offset * h.weight;
+            var anchors = Anchors(garment, clothTris, part);
+            for (int v = 0; v < garment.Length; v++)
+                if (part[v] >= 0 && anchors[part[v]].triangle >= 0) outward[v] = outward[anchors[part[v]].vertex];
+            var (layers, behind) = Stack(garment, clothTris, loose, outward);
+            Keep(garment, push, clothTris, layers);
+            Rigid(garment, push, clothTris, part, anchors, behind);
+            most = 0;
+            moved = 0;
+            foreach (var p in push) {
+                float m = p.magnitude;
+                if (m <= 1e-6f) continue;
+                moved++;
+                most = Mathf.Max(most, m);
+            }
+            return push;
+        }
+
+        /// <summary>The body's triangles but the ones its shape keys collapse now: from below this share of their rest area.</summary>
+        internal static int[] ShownTriangles(Vector3[] rest, Vector3[] now, int[] triangles) {
+            var shown = new List<int>(triangles.Length);
+            for (int t = 0; t < triangles.Length; t += 3) {
+                int a = triangles[t], b = triangles[t + 1], c = triangles[t + 2];
+                float before = Vector3.Cross(rest[b] - rest[a], rest[c] - rest[a]).magnitude;
+                float after = Vector3.Cross(now[b] - now[a], now[c] - now[a]).magnitude;
+                if (before > 0 && after < before * HiddenArea) continue;
+                shown.Add(a);
+                shown.Add(b);
+                shown.Add(c);
+            }
+            return shown.ToArray();
+        }
+
+        /// <summary>
+        /// A skinned renderer's mesh as it's shown now, in world space: its shape keys at the weights given (by name) and
+        /// skinned by its bones as they are. <paramref name="skinning"/> is each vertex's skin matrix (mesh to world).
+        /// </summary>
+        internal static Vector3[] Posed(SkinnedMeshRenderer skin, Mesh mesh, Func<string, float> weightOf, out Matrix4x4[] skinning) {
+            int n = mesh.vertexCount;
+            var bones = skin.bones;
+            var bindposes = mesh.bindposes;
+            var matrices = new Matrix4x4[bindposes.Length];
+            for (int i = 0; i < matrices.Length; i++)
+                matrices[i] = (i < bones.Length && bones[i] != null ? bones[i].localToWorldMatrix : skin.transform.localToWorldMatrix) * bindposes[i];
+            skinning = PerVertex(mesh.boneWeights, matrices, n, skin.transform.localToWorldMatrix);
+
+            var vertices = mesh.vertices;
+            var a = new Vector3[n];
+            var b = new Vector3[n];
+            for (int s = 0; s < mesh.blendShapeCount; s++) {
+                float w = weightOf(mesh.GetBlendShapeName(s));
+                int frames = mesh.GetBlendShapeFrameCount(s);
+                if (Mathf.Abs(w) < 0.0001f || frames == 0) continue;
+                // as Unity blends a shape key's frames: from nothing to the first, then between the two around the weight
+                int j = 0;
+                while (j < frames - 1 && mesh.GetBlendShapeFrameWeight(s, j) < w) j++;
+                float w1 = mesh.GetBlendShapeFrameWeight(s, j);
+                mesh.GetBlendShapeFrameVertices(s, j, b, null, null);
+                if (j == 0) {
+                    float k = w1 != 0 ? w / w1 : 0;
+                    for (int v = 0; v < n; v++) vertices[v] += b[v] * k;
+                } else {
+                    float w0 = mesh.GetBlendShapeFrameWeight(s, j - 1);
+                    mesh.GetBlendShapeFrameVertices(s, j - 1, a, null, null);
+                    float k = w1 != w0 ? (w - w0) / (w1 - w0) : 1;
+                    for (int v = 0; v < n; v++) vertices[v] += Vector3.LerpUnclamped(a[v], b[v], k);
+                }
+            }
+            var world = new Vector3[n];
+            for (int v = 0; v < n; v++) world[v] = skinning[v].MultiplyPoint3x4(vertices[v]);
+            return world;
+        }
+
+        // A mesh overwritten in place: renderers in open scenes that already show it keep their GPU buffers for the old data
+        // (Unity: "data for mesh … does not match the expected mesh data size and vertex stride") and stop drawing. Giving
+        // them the mesh again rebuilds those; their shape key weights stay.
+        internal static void Refresh(Mesh mesh) {
+            foreach (var skin in Object.FindObjectsOfType<SkinnedMeshRenderer>(true)) {
+                if (skin.sharedMesh != mesh) continue;
+                var weights = new float[mesh.blendShapeCount];
+                for (int i = 0; i < weights.Length; i++) weights[i] = skin.GetBlendShapeWeight(i);
+                skin.sharedMesh = null;
+                skin.sharedMesh = mesh;
+                for (int i = 0; i < weights.Length; i++) skin.SetBlendShapeWeight(i, weights[i]);
+            }
+        }
+
+        // A hide collapses what it hides: a face it shrinks below this share of its area is hidden. (Shrink keys, that pull
+        // the body in under the cloth, keep far more.)
+        private const float HiddenArea = 0.05f;
+
+        // The body's triangles but the ones any of the hides collapses.
+        private static int[] Shown(Mesh body, IEnumerable<string> hides, Report report) {
+            var triangles = body.triangles;
+            var vertices = body.vertices;
+            var hidden = new bool[triangles.Length / 3];
+            foreach (string hide in hides ?? Enumerable.Empty<string>()) {
+                int index = body.GetBlendShapeIndex(hide);
+                if (index < 0) continue;
+                var delta = new Vector3[body.vertexCount];
+                body.GetBlendShapeFrameVertices(index, body.GetBlendShapeFrameCount(index) - 1, delta, null, null);
+                int count = 0;
+                for (int t = 0; t < hidden.Length; t++) {
+                    int a = triangles[t * 3], b = triangles[t * 3 + 1], c = triangles[t * 3 + 2];
+                    float before = Vector3.Cross(vertices[b] - vertices[a], vertices[c] - vertices[a]).magnitude;
+                    if (before <= 0 || hidden[t]) continue;
+                    float after = Vector3.Cross(vertices[b] + delta[b] - vertices[a] - delta[a], vertices[c] + delta[c] - vertices[a] - delta[a]).magnitude;
+                    if (after < before * HiddenArea) {
+                        hidden[t] = true;
+                        count++;
+                    }
+                }
+                if (count > 0) report.notes.Add($"{hide} hides {count} of the body's faces: the cloth doesn't follow them.");
+            }
+            var shown = new List<int>(triangles.Length);
+            for (int t = 0; t < hidden.Length; t++)
+                if (!hidden[t]) shown.AddRange(new[] { triangles[t * 3], triangles[t * 3 + 1], triangles[t * 3 + 2] });
+            return shown.ToArray();
         }
 
         // Each vertex's skinning matrix: its bones' matrices, weighted (vertices without weights: the renderer's).
@@ -580,6 +850,7 @@ namespace RosDen.Wardrobe.Editor {
         // cloth triangle over and under them (not ones around them); loose vertices (buttons) with the cloth behind them.
         private static (Pair[] cloth, Pair[] behind) Stack(Vector3[] p, int[] tris, bool[] loose, Vector3[] outward) {
             int n = p.Length;
+            var still = new Vector3[n];   // no movement: for the heights at rest
             var weld = Welds(p);
             var neighbours = new HashSet<int>[n];
             for (int v = 0; v < n; v++) neighbours[weld[v]] ??= new HashSet<int>();
@@ -636,7 +907,7 @@ namespace RosDen.Wardrobe.Editor {
                 }
                 if (found == null) return null;
                 var f2 = found.Value;
-                f2.rest = f2.Height(p, new Vector3[n], tris, out _);
+                f2.rest = f2.Height(p, still, tris, out _);
                 return f2;
             }
             var cloth = new List<Pair>();
@@ -652,7 +923,7 @@ namespace RosDen.Wardrobe.Editor {
                 if (below != null) {
                     var b = below.Value;
                     b.sign = -b.sign;                     // the ray went along -d: flip so the normal is outward
-                    b.rest = b.Height(p, new Vector3[n], tris, out _);
+                    b.rest = b.Height(p, still, tris, out _);
                     cloth.Add(b);
                 }
             }
@@ -664,7 +935,7 @@ namespace RosDen.Wardrobe.Editor {
                 if (b == null) continue;
                 var pb = b.Value;
                 pb.sign = -pb.sign;
-                pb.rest = pb.Height(p, new Vector3[n], tris, out _);
+                pb.rest = pb.Height(p, still, tris, out _);
                 behind.Add(pb);
             }
             return (cloth.ToArray(), behind.ToArray());
@@ -710,7 +981,8 @@ namespace RosDen.Wardrobe.Editor {
         // How far each garment vertex has to move so the body stays Clearance below the cloth: a ray from every body
         // vertex along its normal finds the cloth over it; a face too close, or under the skin, is moved out along that
         // normal (twice over, as moving one face changes what's over its neighbours). Loose parts are left at zero: see Rigid.
-        private static Vector3[] Clear(Vector3[] cloth, int[] tris, bool[] loose, Vector3[] body, int[] bodyTris, out float most, out int moved) {
+        private static Vector3[] Clear(Vector3[] cloth, int[] tris, bool[] loose, Vector3[] body, int[] bodyTris, out float most, out int moved,
+            float behind = ClearBehind, float maxPush = MaxPush, int passes = 2) {
             int n = cloth.Length;
             var weld = Welds(cloth);
             // neighbours through the cloth's edges, seams welded: for softening the push into the faces around it
@@ -736,7 +1008,7 @@ namespace RosDen.Wardrobe.Editor {
             var clothTris = new List<int>();
             for (int t = 0; t < tris.Length; t += 3)
                 if (!loose[tris[t]]) clothTris.Add(t);
-            for (int pass = 0; pass < 2; pass++) {
+            for (int pass = 0; pass < passes; pass++) {
                 var grid = new Dictionary<Vector3Int, List<int>>();
                 foreach (int t in clothTris) {
                     Vector3 a = current[tris[t]], b = current[tris[t + 1]], c = current[tris[t + 2]];
@@ -760,7 +1032,7 @@ namespace RosDen.Wardrobe.Editor {
                     int bestTri = -1;
                     foreach (int t in list) {
                         if (!Ray(o, d, current[tris[t]], current[tris[t + 1]], current[tris[t + 2]], out float hit)) continue;
-                        if (hit < -ClearBehind || hit > ClearAhead || Mathf.Abs(hit) >= Mathf.Abs(bestT)) continue;
+                        if (hit < -behind || hit > ClearAhead || Mathf.Abs(hit) >= Mathf.Abs(bestT)) continue;
                         bestT = hit;
                         bestTri = t;
                     }
@@ -796,7 +1068,7 @@ namespace RosDen.Wardrobe.Editor {
                 bool any = false;
                 for (int i = 0; i < n; i++)
                     if (need[i] > 0) {
-                        var step = Vector3.ClampMagnitude(total[i] + dir[i] * need[i], MaxPush) - total[i];
+                        var step = Vector3.ClampMagnitude(total[i] + dir[i] * need[i], maxPush) - total[i];
                         if (step.sqrMagnitude < 1e-12f) continue;
                         total[i] += step;
                         current[i] += step;
@@ -901,6 +1173,71 @@ namespace RosDen.Wardrobe.Editor {
 
         // ---------------------------------------------------------------- helpers
 
+        private const float SimMatch = 0.2f;   // metres a sim's vertex may be from the source's it's matched to
+
+        // A sim's cloth in world space, vertex for vertex the source's (garment: the source's, world space). Unity splits
+        // the exports' vertices where their normals differ, so a sim's mesh can have a few more or fewer than the source's
+        // and in another order: each cloth vertex is matched to the sim's with the same UV, the nearest of those. The loose
+        // parts (stitching, buttons: many share UVs) aren't matched; they ride on the sim's cloth (Rigid). Null (and why, in
+        // the report) when it isn't the source's garment moved.
+        private static Vector3[] SimWorld(WardrobeSim sim, Mesh source, Vector3[] garment, bool[] loose, string label, Report report) {
+            var skin = sim.source.GetComponentsInChildren<SkinnedMeshRenderer>(true).FirstOrDefault(s => s.sharedMesh != null);
+            if (skin == null) {
+                report.skipped.Add((label, "has no skinned mesh: export it rigged to the avatar's skeleton"));
+                return null;
+            }
+            var mesh = skin.sharedMesh;
+            var bones = skin.bones.Select((b, i) => (b != null ? b.localToWorldMatrix : skin.transform.localToWorldMatrix) * mesh.bindposes[i]).ToArray();
+            var per = PerVertex(mesh.boneWeights, bones, mesh.vertexCount, skin.transform.localToWorldMatrix);
+            var vertices = mesh.vertices;
+            var simWorld = new Vector3[vertices.Length];
+            for (int v = 0; v < simWorld.Length; v++) simWorld[v] = per[v].MultiplyPoint3x4(vertices[v]);
+
+            var uv = mesh.uv;
+            var sourceUv = source.uv;
+            if (uv.Length != vertices.Length || sourceUv.Length != source.vertexCount) {
+                report.skipped.Add((label, "it or the source has no UVs to match their vertices by"));
+                return null;
+            }
+            // the same vertices in the same order: as it is
+            if (vertices.Length == source.vertexCount) {
+                bool same = true;
+                for (int v = 0; v < uv.Length && same; v++) same = (uv[v] - sourceUv[v]).sqrMagnitude <= 1e-10f;
+                if (same) return simWorld;
+            }
+
+            long Key(Vector2 t) => (long)Mathf.Round(t.x * 65536f) * 1000003L + (long)Mathf.Round(t.y * 65536f);
+            var byUv = new Dictionary<long, List<int>>();
+            for (int v = 0; v < uv.Length; v++) {
+                long k = Key(uv[v]);
+                if (!byUv.TryGetValue(k, out var list)) byUv[k] = list = new List<int>(1);
+                list.Add(v);
+            }
+            var world = new Vector3[garment.Length];
+            int cloth = 0, unmatched = 0;
+            for (int v = 0; v < garment.Length; v++) {
+                world[v] = garment[v];
+                if (loose[v]) continue;
+                cloth++;
+                int best = -1;
+                float bestDistance = SimMatch;
+                if (byUv.TryGetValue(Key(sourceUv[v]), out var list))
+                    foreach (int s in list) {
+                        float d = Vector3.Distance(simWorld[s], garment[v]);
+                        if (d < bestDistance) (best, bestDistance) = (s, d);
+                    }
+                if (best >= 0) world[v] = simWorld[best];
+                else unmatched++;
+            }
+            if (unmatched > cloth / 100) {
+                report.skipped.Add((label, $"{unmatched} of the cloth's {cloth} vertices have no vertex in it with their UV within " +
+                                           $"{SimMatch * 100:0} cm: it isn't the source's garment simulated again (same pattern, mesh and UVs)"));
+                return null;
+            }
+            if (unmatched > 0) report.notes.Add($"{label}: {unmatched} cloth vertices without a match stay as they are in the source.");
+            return world;
+        }
+
         private static SkinnedMeshRenderer SourceSkin(WardrobeGarment g) =>
             g.source == null ? null : g.source.GetComponentsInChildren<SkinnedMeshRenderer>(true).FirstOrDefault(s => s.sharedMesh != null);
 
@@ -934,6 +1271,14 @@ namespace RosDen.Wardrobe.Editor {
                 hash.Append(AssetDatabase.GetAssetDependencyHash(p).ToString());
             }
             foreach (string s in Shapes(g)) hash.Append(s);
+            foreach (var sim in g.sims ?? new List<WardrobeSim>()) {
+                if (sim?.source == null) continue;
+                string p = AssetDatabase.GetAssetPath(sim.source);
+                hash.Append(p);
+                hash.Append(AssetDatabase.GetAssetDependencyHash(p).ToString());
+                foreach (var s in sim.shapes) hash.Append($"{s.shape}@{s.weight}");
+            }
+            foreach (string h in g.bodyHides ?? new List<string>()) hash.Append("hide:" + h);
             return hash.ToString();
         }
     }

@@ -601,7 +601,7 @@ namespace RosDen.Wardrobe.Editor {
                 bool retargeted = false;
                 if (rc.target == null) {
                     var skins = rc.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                    rc.target = skins.FirstOrDefault(s => s.sharedMesh != null && s.sharedMesh == rc.garment.mesh) ?? skins.FirstOrDefault();
+                    rc.target = skins.FirstOrDefault(s => WardrobeClearance.Wears(s.sharedMesh, rc.garment)) ?? skins.FirstOrDefault();
                     if (rc.target == null) continue;
                     retargeted = true;
                     EditorUtility.SetDirty(rc);

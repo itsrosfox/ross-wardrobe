@@ -17,6 +17,49 @@ namespace RosDen.Wardrobe.Editor {
             EditorGUILayout.Space();
 
             DrawBody(avatar, b);
+            EditorGUILayout.Space();
+            DrawHides(avatar, b);
+            DrawClearance(avatar);
+        }
+
+        // The body shape keys worn garments suggest hiding. Only the user turns them on (or off); nothing sets them by itself.
+        private static void DrawHides(GameObject avatar, WardrobeAvatar b) {
+            var hides = WardrobeBody.SuggestedHides(avatar);
+            if (hides.Count == 0) return;
+            GUILayout.Label("Suggested Hides", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Body shape keys the worn garments suggest turning on under them. They're only changed when you turn them on here.",
+                EditorStyles.wordWrappedMiniLabel);
+            foreach (var (shape, garments) in hides) {
+                bool on = WardrobeBody.ShapeWeight(avatar, b, shape) >= 99.5f;
+                bool want = EditorGUILayout.ToggleLeft(new GUIContent(shape, "Suggested by " + string.Join(", ", garments)), on);
+                if (want != on) WardrobeBody.SetShapeWeight(avatar, b, shape, want ? 100 : 0);
+            }
+            EditorGUILayout.Space();
+        }
+
+        private static void DrawClearance(GameObject avatar) {
+            GUILayout.Label("Clearance", EditorStyles.boldLabel);
+            bool on = EditorGUILayout.ToggleLeft(new GUIContent("Fix clipping", "After the body or what's worn changes, move worn garments' cloth " +
+                "out wherever the body still comes through it (a shape key on a copy of the garment's mesh, kept under Wardrobe Recolors)"),
+                WardrobeClearance.Enabled);
+            if (on != WardrobeClearance.Enabled) WardrobeClearance.Enabled = on;
+            if (!on) return;
+            var last = WardrobeClearance.LastFor(avatar);
+            if (last != null)
+                foreach (var r in last)
+                    EditorGUILayout.LabelField(r.error != null ? $"Failed: {r.error}"
+                        : r.moved == 0 ? $"{r.garment}: doesn't clip." : $"{r.garment}: {r.moved} vertices moved out (up to {r.mm:0.#} mm).",
+                        EditorStyles.wordWrappedMiniLabel);
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.LabelField("Runs by itself after a change, and before a VRChat build.", EditorStyles.wordWrappedMiniLabel);
+                if (GUILayout.Button("Check Again", GUILayout.Width(100))) {
+                    try {
+                        WardrobeClearance.Apply(avatar, again: true);
+                    } catch (Exception e) {
+                        Debug.LogException(e, avatar);
+                    }
+                }
+            }
         }
 
         private void DrawBody(GameObject avatar, WardrobeAvatar b) {
