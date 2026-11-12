@@ -107,6 +107,7 @@ namespace RosDen.Wardrobe.Editor {
             g.avatarId = avatar?.String("id").Trim() ?? "";
             g.avatarVersion = avatar?.String("version") ?? "";
             g.prefab = Ref<GameObject>(j, "prefab");
+            g.menuPath = j.String("menu");
             g.thumbnail = Ref<Texture2D>(j, "thumbnail");
             g.source = Ref<GameObject>(j, "source");
             g.mesh = Ref<Mesh>(j, "mesh");
@@ -192,6 +193,8 @@ namespace RosDen.Wardrobe.Editor {
             avatar["version"] = g.avatarVersion ?? "";
             j["avatar"] = avatar;
             j["prefab"] = Ref(g.prefab);
+            if (!string.IsNullOrWhiteSpace(g.menuPath)) j["menu"] = g.menuPath.Trim();
+            else j.Remove("menu");
             j["thumbnail"] = Ref(g.thumbnail);
             if (g.source != null) j["source"] = Ref(g.source);
             else j.Remove("source");

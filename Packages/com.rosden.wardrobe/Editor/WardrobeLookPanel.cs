@@ -21,7 +21,7 @@ namespace RosDen.Wardrobe.Editor {
 
         private readonly Action _repaint;
         private WardrobeRecolor _target;
-        private RenderTexture _preview, _previewNormal, _previewSurface, _previewGarmentSurface;
+        private RenderTexture _preview, _previewNormal, _previewSurface, _previewGarmentSurface, _previewGarmentNormal;
         private readonly Dictionary<string, RenderTexture> _previewOutputs = new Dictionary<string, RenderTexture>();
         private Renderer _previewRenderer;
         private int _previewSlot;
@@ -665,18 +665,21 @@ namespace RosDen.Wardrobe.Editor {
             var type = WardrobeBaker.MaterialType(rc);
             WardrobeBaker.ClearPreview(_previewRenderer, _previewSlot);
             // Patterns' relief and metalness/roughness/occlusion, where the material type has a texture for them.
-            _previewNormal = type.outputs.Any(o => o.normal) ? WardrobeBaker.RenderPreviewNormal(g, rc.look, _previewNormal) : Drop(_previewNormal);
+            _previewNormal = type.outputs.Any(o => o.normal || o.UsesNormal) ? WardrobeBaker.RenderPreviewNormal(g, rc.look, _previewNormal) : Drop(_previewNormal);
             _previewSurface = type.outputs.Any(o => o.UsesSurface) ? WardrobeBaker.RenderPreviewSurface(g, rc.look, _previewSurface) : Drop(_previewSurface);
             foreach (var output in type.outputs) {
                 Texture texture = null;
                 if (output.albedo && WardrobeMaterialTypes.OpacityIsAlbedoAlpha(g)) texture = _preview;
                 else if (output.normal) texture = _previewNormal;
-                else if (output.albedo || output.UsesAlbedo || output.UsesSurface && _previewSurface != null) {
+                else if (output.albedo || output.UsesAlbedo || output.UsesSurface && _previewSurface != null || output.UsesNormal && _previewNormal != null) {
                     var surface = _previewSurface;
                     if (surface == null && output.UsesSurface)
                         surface = _previewGarmentSurface = _previewGarmentSurface != null ? _previewGarmentSurface : WardrobeBaker.GarmentSurface(g);
+                    var normal = _previewNormal;
+                    if (normal == null && output.UsesNormal)
+                        normal = _previewGarmentNormal = _previewGarmentNormal != null ? _previewGarmentNormal : WardrobeBaker.GarmentNormal(g);
                     _previewOutputs.TryGetValue(output.property, out var rt);
-                    texture = _previewOutputs[output.property] = WardrobeBaker.RenderPreviewOutput(g, output, _preview, surface, rt);
+                    texture = _previewOutputs[output.property] = WardrobeBaker.RenderPreviewOutput(g, output, _preview, surface, normal, rt);
                 }
                 if (texture == null) continue;
                 foreach (string property in output.Properties) WardrobeBaker.SetPreview(_previewRenderer, _previewSlot, property, texture);
@@ -696,6 +699,7 @@ namespace RosDen.Wardrobe.Editor {
             _previewNormal = Drop(_previewNormal);
             _previewSurface = Drop(_previewSurface);
             _previewGarmentSurface = Drop(_previewGarmentSurface);
+            _previewGarmentNormal = Drop(_previewGarmentNormal);
             foreach (var rt in _previewOutputs.Values) Drop(rt);
             _previewOutputs.Clear();
             SceneView.RepaintAll();

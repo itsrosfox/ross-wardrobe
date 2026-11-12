@@ -58,15 +58,18 @@ namespace RosDen.Wardrobe.Editor {
         [MenuItem("Assets/Create/Ros' Wardrobe/Garment", false, 2000)]
         private static void NewGarment() => New("New Garment" + WardrobeConfigs.Garment, GarmentTemplate);
 
-        [MenuItem("Assets/Create/Ros' Wardrobe/Pattern", false, 2001)]
-        private static void NewPattern() => New("New Pattern" + WardrobeConfigs.Pattern,
+        internal const string PatternTemplate =
             "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n    \"tileSize\": [10, 10],\n" +
-            "    \"colors\": [\n        {\n            \"name\": \"Colour\",\n            \"color\": \"#F4F4F2\",\n            \"canGradient\": true\n        }\n    ]\n}\n");
+            "    \"colors\": [\n        {\n            \"name\": \"Colour\",\n            \"color\": \"#F4F4F2\",\n            \"canGradient\": true\n        }\n    ]\n}\n";
+        internal const string PresetTemplate =
+            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n" +
+            "    \"parts\": [\n        {\n            \"region\": \"*\",\n            \"pattern\": \"rosden.solid\",\n            \"colors\": [\"#F4F4F2\"]\n        }\n    ]\n}\n";
+
+        [MenuItem("Assets/Create/Ros' Wardrobe/Pattern", false, 2001)]
+        private static void NewPattern() => New("New Pattern" + WardrobeConfigs.Pattern, PatternTemplate);
 
         [MenuItem("Assets/Create/Ros' Wardrobe/Preset", false, 2002)]
-        private static void NewPreset() => New("New Preset" + WardrobeConfigs.Preset,
-            "{\n    \"id\": \"\",\n    \"name\": \"\",\n    \"version\": \"1.0.0\",\n    \"author\": \"\",\n" +
-            "    \"parts\": [\n        {\n            \"region\": \"*\",\n            \"pattern\": \"rosden.solid\",\n            \"colors\": [\"#F4F4F2\"]\n        }\n    ]\n}\n");
+        private static void NewPreset() => New("New Preset" + WardrobeConfigs.Preset, PresetTemplate);
 
         [MenuItem("Assets/Create/Ros' Wardrobe/Avatar Base", false, 2003)]
         private static void NewAvatar() => New("New Avatar" + WardrobeConfigs.Avatar, AvatarTemplate);
@@ -117,6 +120,7 @@ namespace RosDen.Wardrobe.Editor {
                 EditorGUIUtility.labelWidth = Mathf.Clamp(EditorGUIUtility.currentViewWidth * 0.36f, 110, 160);
                 _form.DrawToolbar();
                 EditorGUILayout.Space();
+                _form.DrawProblems();
                 _form.Draw();
             } finally {
                 EditorGUIUtility.labelWidth = labelWidth;

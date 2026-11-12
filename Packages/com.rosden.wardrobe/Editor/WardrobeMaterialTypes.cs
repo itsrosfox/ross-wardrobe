@@ -8,29 +8,59 @@ using Object = UnityEngine.Object;
 
 namespace RosDen.Wardrobe.Editor {
     /// <summary>
-    /// A way garments can be rendered (Toon, PBR…), read from a .rmat file. It doesn't belong to any garment: it names a
-    /// shader (or a template material to copy settings from) and says which of a garment's maps go into which texture
-    /// property, channel by channel. Ros' Wardrobe builds each garment's material from that, packing textures where the
-    /// garment's own don't already match.
+    /// A way garments can be rendered (Toon, PBR…), read from a .rmat file. It doesn't belong to any garment: it links a
+    /// material (made in Unity like any other, with any shader) and says what goes into each of its texture properties:
+    /// the look's colour, the normal map, or a texture packed channel by channel from the garment's maps (any channel of
+    /// any map, inverted or not, normals as X/Y/Z or octahedral). Ros' Wardrobe builds each garment's material from that,
+    /// as a Material Variant of the linked material, so changes to it show on every garment in the type.
     /// </summary>
     public class WardrobeMaterialType {
         /// <summary>What a channel of a material texture holds.</summary>
-        public enum Source { Value, AlbedoR, AlbedoG, AlbedoB, Opacity, Metalness, Roughness, Smoothness, Occlusion, Sheen }
+        public enum Source {
+            Value, AlbedoR, AlbedoG, AlbedoB, Opacity, Metalness, Roughness, Smoothness, Occlusion, Sheen,
+            AlbedoLuminance, NormalX, NormalY, NormalZ, NormalOctU, NormalOctV, NormalHemiOctU, NormalHemiOctV,
+        }
 
-        public static readonly string[] SourceNames = { "value", "albedo.r", "albedo.g", "albedo.b", "opacity", "metalness", "roughness", "smoothness", "occlusion", "sheen" };
+        /// <summary>How the .rmat writes each source.</summary>
+        public static readonly string[] SourceNames = {
+            "value", "albedo.r", "albedo.g", "albedo.b", "opacity", "metalness", "roughness", "smoothness", "occlusion", "sheen",
+            "albedo.luminance", "normal.x", "normal.y", "normal.z", "normal.oct.u", "normal.oct.v", "normal.hemioct.u", "normal.hemioct.v",
+        };
 
-        /// <summary>One texture property: the garment's albedo or normal map as it is, or 4 channels picked from its maps.</summary>
+        /// <summary>How the Setup tab shows each source (menu paths).</summary>
+        public static readonly string[] SourceLabels = {
+            "Constant value", "Look colour/Red", "Look colour/Green", "Look colour/Blue", "Opacity (alpha)",
+            "Surface/Metalness", "Surface/Roughness", "Surface/Smoothness (1 − roughness)", "Surface/Ambient occlusion", "Surface/Sheen",
+            "Look colour/Brightness (greyscale)", "Normal/X (red)", "Normal/Y (green)", "Normal/Z (blue)",
+            "Normal/Octahedral U", "Normal/Octahedral V", "Normal/Hemi-octahedral U", "Normal/Hemi-octahedral V",
+        };
+
+        public static bool IsNormal(Source s) => s >= Source.NormalX;
+
+        public static bool IsAlbedo(Source s) => s >= Source.AlbedoR && s <= Source.Opacity || s == Source.AlbedoLuminance;
+
+        public static bool IsSurface(Source s) => s >= Source.Metalness && s <= Source.Sheen;
+
+        /// <summary>One texture property: the look's albedo or the normal map as it is, or 4 channels packed from the garment's maps.</summary>
         public class Output {
             public string property;
             public bool albedo, normal;   // the whole (looked) albedo or normal map
             public Source[] channels = new Source[4];
             public float[] values = new float[4];
+            public bool[] invert = new bool[4];
             public List<string> alsoOn = new List<string>();
             public string keyword;
 
-            public bool UsesSurface => !albedo && !normal && channels.Any(c => c >= Source.Metalness);
+            public bool Packed => !albedo && !normal;
 
-            public bool UsesAlbedo => albedo || channels.Any(c => c >= Source.AlbedoR && c <= Source.Opacity);
+            public bool UsesSurface => Packed && channels.Any(IsSurface);
+
+            public bool UsesAlbedo => albedo || Packed && channels.Any(IsAlbedo);
+
+            public bool UsesNormal => Packed && channels.Any(IsNormal);
+
+            /// <summary>Whether it holds colour (sRGB) rather than data: it has the look's red, green or blue.</summary>
+            public bool Colour => albedo || Packed && channels.Any(c => c >= Source.AlbedoR && c <= Source.AlbedoB);
 
             public IEnumerable<string> Properties => new[] { property }.Concat(alsoOn).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).Distinct();
         }
@@ -39,6 +69,8 @@ namespace RosDen.Wardrobe.Editor {
         public string shaderName;
         public Shader shader;
         public Material template;
+        /// <summary>Materials made in this type are Material Variants of <see cref="template"/>, so they follow changes to it.</summary>
+        public bool follow = true;
         public List<Output> outputs = new List<Output>();
         public Dictionary<string, float> floats = new Dictionary<string, float>();
         public Dictionary<string, Color> colors = new Dictionary<string, Color>();
@@ -48,6 +80,9 @@ namespace RosDen.Wardrobe.Editor {
         public string DisplayName => string.IsNullOrWhiteSpace(name) ? id : name;
 
         public Shader Shader => shader != null ? shader : template != null ? template.shader : null;
+
+        /// <summary>Whether its materials are variants of the linked material (it has one, and no other shader).</summary>
+        public bool Linked => follow && template != null && (shader == null || shader == template.shader);
 
         public bool Fits(WardrobeGarment g) => garments.Count == 0 || garments.Any(t => t.Matches(g));
 
@@ -90,24 +125,25 @@ namespace RosDen.Wardrobe.Editor {
         // ---------------------------------------------------------------- reading
 
         private static List<WardrobeMaterialType> Load() {
+            // (what's wrong with a file shows in the Setup tab's Problems)
             var list = new List<WardrobeMaterialType>();
             foreach (string path in WardrobeConfigs.Paths(WardrobeConfigs.Material)) {
                 try {
                     var t = Read(path, WardrobeJson.Parse(File.ReadAllText(path)));
-                    if (t.id.Length == 0) Debug.LogWarning($"[Ros' Wardrobe] {path} has no id");
-                    else if (list.All(o => !WardrobeConfigs.SameId(o.id, t.id))) list.Add(t);
-                } catch (Exception e) {
-                    Debug.LogWarning($"[Ros' Wardrobe] Couldn't read {path}: {e.Message}");
+                    if (t.id.Length > 0 && list.All(o => !WardrobeConfigs.SameId(o.id, t.id))) list.Add(t);
+                } catch (Exception) {
+                    // unreadable: shown in Problems
                 }
             }
             return list;
         }
 
-        internal static WardrobeMaterialType Read(string path, JsonObject j) {
+        /// <summary>Reads a .rmat; what it gets wrong goes into <paramref name="notes"/>.</summary>
+        internal static WardrobeMaterialType Read(string path, JsonObject j, List<string> notes = null) {
             var t = new WardrobeMaterialType {
                 id = j.String("id").Trim(), name = j.String("name"), version = j.String("version"), author = j.String("author"),
                 description = j.String("description"), path = path, shaderName = j.String("shader").Trim(),
-                template = WardrobeConfigs.Load<Material>(path, j.String("template")),
+                template = WardrobeConfigs.Load<Material>(path, j.String("template")), follow = j.Bool("follow", true),
             };
             if (t.shaderName.Length > 0) t.shader = Shader.Find(t.shaderName);
             foreach (var o in j.Objects("textures")) {
@@ -121,14 +157,14 @@ namespace RosDen.Wardrobe.Editor {
                     output.albedo = whole.Trim().ToLowerInvariant() == "albedo";
                     output.normal = whole.Trim().ToLowerInvariant() == "normal";
                     if (!output.albedo && !output.normal) {
-                        Debug.LogWarning($"[Ros' Wardrobe] {path}: '{output.property}' takes \"{whole}\"; a whole texture is \"albedo\" or \"normal\", else list 4 channels");
+                        notes?.Add($"{output.property} takes \"{whole}\": a whole texture is \"albedo\" or \"normal\", else it lists 4 channels.");
                         continue;
                     }
                 } else {
                     var list = channels as List<object> ?? new List<object>();
                     for (int c = 0; c < 4; c++) {
                         object v = c < list.Count ? list[c] : null;
-                        (output.channels[c], output.values[c]) = ParseSource(v, c == 3 ? 1 : 0, path, output.property);
+                        (output.channels[c], output.values[c], output.invert[c]) = ParseChannel(v, c == 3 ? 1 : 0, output.property, notes);
                     }
                 }
                 t.outputs.Add(output);
@@ -146,15 +182,33 @@ namespace RosDen.Wardrobe.Editor {
             return t;
         }
 
-        private static (WardrobeMaterialType.Source, float) ParseSource(object v, float fallback, string path, string property) {
-            if (v is double n) return (WardrobeMaterialType.Source.Value, Mathf.Clamp01((float)n));
+        // A channel: a number (that value everywhere), a source's name, or { "from": name, "invert": true } / { "value": n }.
+        private static (WardrobeMaterialType.Source, float, bool) ParseChannel(object v, float fallback, string property, List<string> notes) {
+            if (v is double n) return (WardrobeMaterialType.Source.Value, Mathf.Clamp01((float)n), false);
+            bool invert = false;
+            if (v is JsonObject o) {
+                if (o["value"] is double value) return (WardrobeMaterialType.Source.Value, Mathf.Clamp01((float)value), false);
+                invert = o.Bool("invert");
+                v = o.String("from");
+            }
             if (v is string s) {
                 s = s.Trim().ToLowerInvariant();
                 int i = Array.IndexOf(WardrobeMaterialType.SourceNames, s);
-                if (i > 0) return ((WardrobeMaterialType.Source)i, 0);
-                Debug.LogWarning($"[Ros' Wardrobe] {path}: '{property}' has a channel \"{s}\", which isn't one of {string.Join(", ", WardrobeMaterialType.SourceNames.Skip(1))} or a number");
+                if (i > 0) return ((WardrobeMaterialType.Source)i, 0, invert);
+                notes?.Add($"{property} has a channel \"{s}\", which isn't one of {string.Join(", ", WardrobeMaterialType.SourceNames.Skip(1))} or a number.");
             }
-            return (WardrobeMaterialType.Source.Value, fallback);
+            return (WardrobeMaterialType.Source.Value, fallback, false);
+        }
+
+        /// <summary>A channel as the .rmat writes it.</summary>
+        internal static object WriteChannel(WardrobeMaterialType.Source source, float value, bool invert) {
+            if (source == WardrobeMaterialType.Source.Value) return Math.Round(Mathf.Clamp01(value), 3);
+            string name = WardrobeMaterialType.SourceNames[(int)source];
+            if (!invert) return name;
+            var o = new JsonObject();
+            o["from"] = name;
+            o["invert"] = true;
+            return o;
         }
 
         // ---------------------------------------------------------------- building a garment's material
@@ -252,6 +306,14 @@ namespace RosDen.Wardrobe.Editor {
         private static string MaterialName(WardrobeGarment g, WardrobeMaterialType type) =>
             WardrobeAssets.FileName($"{WardrobeAssets.BaseName(g)} ({type.DisplayName})");
 
+        /// <summary>
+        /// Whether the garment's materials in the type are Material Variants of its linked material: always when the type
+        /// follows one, but a shipped material only when the linked material ships too (it's in Assets, not in a package
+        /// buyers may not have).
+        /// </summary>
+        public static bool Variant(WardrobeMaterialType type, bool shipped) =>
+            type.Linked && (!shipped || AssetDatabase.GetAssetPath(type.template).StartsWith("Assets/"));
+
         // The garment's material in a type, in a folder: kept while its key matches, else made again.
         private static Material Build(WardrobeGarment g, WardrobeMaterialType type, string folder, string key, bool shipped) {
             string problem = type.Problem;
@@ -260,15 +322,25 @@ namespace RosDen.Wardrobe.Editor {
             string path = $"{folder}/{name}.mat";
             var material = AssetDatabase.LoadAssetAtPath<Material>(path);
             var importer = material != null ? AssetImporter.GetAtPath(path) : null;
-            if (material != null && importer != null && importer.userData == key) return material;
+            bool variant = Variant(type, shipped);
+            // (a variant whose linked material was replaced or deleted, or that was unlinked by hand, is made again)
+            if (material != null && importer != null && importer.userData == key && (!variant || material.parent == type.template)) return material;
 
             WardrobeAssets.EnsureFolder(folder);
-            bool create = material == null;
-            var made = New(type);
-            if (shipped) made.shader = PackShader(g, made.shader);
+            Material made;
+            if (variant) {
+                // a variant of the linked material: only what's set here is its own, the rest follows the material
+                made = material ?? new Material(type.template);
+                if (made.parent != type.template) made.parent = type.template;
+                made.RevertAllPropertyOverrides();
+                Settings(type, made);
+            } else {
+                made = New(type);
+                if (shipped) made.shader = PackShader(g, made.shader);
+            }
             int maxSize = shipped ? g.mapSize : 0;
 
-            RenderTexture surface = null;
+            RenderTexture surface = null, normal = null;
             try {
                 foreach (var output in type.outputs) {
                     Texture texture;
@@ -278,7 +350,8 @@ namespace RosDen.Wardrobe.Editor {
                         texture = Existing(g, output);
                         if (texture == null) {
                             if (output.UsesSurface && surface == null) surface = WardrobeBaker.GarmentSurface(g);
-                            texture = WritePacked(g, $"{folder}/{name} {Clean(output.property)}.png", output, g.baseColor, surface, maxSize);
+                            if (output.UsesNormal && normal == null) normal = WardrobeBaker.GarmentNormal(g);
+                            texture = WritePacked(g, $"{folder}/{name} {Clean(output.property)}.png", output, g.baseColor, surface, normal, maxSize);
                         }
                     }
                     foreach (string property in output.Properties)
@@ -290,15 +363,16 @@ namespace RosDen.Wardrobe.Editor {
                 }
             } finally {
                 if (surface != null) Object.DestroyImmediate(surface);
+                if (normal != null) Object.DestroyImmediate(normal);
             }
 
             made.name = name;
-            if (create) AssetDatabase.CreateAsset(material = made, path);
-            else {
+            if (material == null) AssetDatabase.CreateAsset(material = made, path);
+            else if (made != material) {
                 EditorUtility.CopySerialized(made, material);
                 Object.DestroyImmediate(made);
-                EditorUtility.SetDirty(material);
             }
+            EditorUtility.SetDirty(material);
             AssetDatabase.SaveAssetIfDirty(material);
             importer = AssetImporter.GetAtPath(path);
             importer.userData = key;
@@ -323,14 +397,20 @@ namespace RosDen.Wardrobe.Editor {
             return made;
         }
 
-        // The type's template (or shader) with its floats, colours and keywords.
+        // The type's template (or shader) with its floats, colours and keywords: a copy, not a variant.
         private static Material New(WardrobeMaterialType type) {
             var made = type.template != null ? new Material(type.template) : new Material(type.Shader);
+            if (made.parent != null) made.parent = null;
             if (type.shader != null) made.shader = type.shader;
+            Settings(type, made);
+            return made;
+        }
+
+        // The type's own floats, colours and keywords.
+        private static void Settings(WardrobeMaterialType type, Material made) {
             foreach (var f in type.floats) if (made.HasProperty(f.Key)) made.SetFloat(f.Key, f.Value);
             foreach (var c in type.colors) if (made.HasProperty(c.Key)) made.SetColor(c.Key, c.Value);
             foreach (string k in type.keywords) made.EnableKeyword(k);
-            return made;
         }
 
         private static string Clean(string property) => property.TrimStart('_');
@@ -344,7 +424,7 @@ namespace RosDen.Wardrobe.Editor {
             Texture2D found = null;
             for (int c = 0; c < 4; c++) {
                 var (texture, channel, invert) = Channel(g, output.channels[c]);
-                if (texture == null || (int)channel != c || invert) return null;
+                if (texture == null || (int)channel != c || invert != output.invert[c]) return null;
                 if (found != null && texture != found) return null;
                 found = texture;
             }
@@ -371,21 +451,22 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         /// <summary>
-        /// Packs an output's channels from an albedo and a surface map (R metal, G rough, B occlusion, A sheen) into a PNG,
-        /// at the base colour's size (no bigger than <paramref name="maxSize"/> when it's set).
+        /// Packs an output's channels from an albedo, a surface map (R metal, G rough, B occlusion, A sheen) and a normal
+        /// map (plain XYZ in RGB, see <see cref="WardrobeBaker.GarmentNormal"/>) into a PNG, at the base colour's size (no
+        /// bigger than <paramref name="maxSize"/> when it's set).
         /// </summary>
         internal static Texture2D WritePacked(WardrobeGarment g, string path, WardrobeMaterialType.Output output, Texture albedo, Texture surface,
-            int maxSize = 0) {
+            Texture normal, int maxSize = 0) {
             var size = WardrobeBaker.SourceSize(g.baseColor);
             if (maxSize > 0 && Mathf.Max(size.x, size.y) > maxSize) {
                 float scale = (float)maxSize / Mathf.Max(size.x, size.y);
                 size = new Vector2Int(Mathf.Max(1, Mathf.RoundToInt(size.x * scale)), Mathf.Max(1, Mathf.RoundToInt(size.y * scale)));
             }
-            bool colour = output.channels.Any(c => c >= WardrobeMaterialType.Source.AlbedoR && c <= WardrobeMaterialType.Source.AlbedoB);
+            bool colour = output.Colour;
             var rt = RenderTexture.GetTemporary(size.x, size.y, 0, RenderTextureFormat.ARGB32, colour ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
             byte[] png;
             try {
-                WardrobeBaker.Pack(g, output, albedo, surface, rt);
+                WardrobeBaker.Pack(g, output, albedo, surface, normal, rt);
                 var read = WardrobeBaker.ReadBack(rt, TextureFormat.RGBA32, !colour);
                 try { png = read.EncodeToPNG(); }
                 finally { Object.DestroyImmediate(read); }
@@ -406,11 +487,14 @@ namespace RosDen.Wardrobe.Editor {
         // What the built material depends on: the .rmat, the .rgarm and the textures and template they name.
         // (Shipped: also the map size and the shader the pack has; the .rgarm's own text isn't, as making the material doesn't change it.)
         private static string Key(WardrobeGarment g, WardrobeMaterialType type, bool shipped = false) {
-            var paths = new List<string> { type.path, shipped ? null : WardrobeGarments.PathOf(g), AssetDatabase.GetAssetPath(type.template) };
+            // a variant follows its linked material by itself: only which material it is counts, not what's in it
+            bool variant = Variant(type, shipped);
+            var paths = new List<string> { type.path, shipped ? null : WardrobeGarments.PathOf(g), variant ? null : AssetDatabase.GetAssetPath(type.template) };
             paths.AddRange(new Object[] { g.baseColor, g.normalMap, g.metalness?.texture, g.roughness?.texture, g.occlusion?.texture, g.sheen?.texture, g.opacity?.texture }
                 .Where(o => o != null).Select(AssetDatabase.GetAssetPath));
             var hash = new Hash128();
             hash.Append(2);   // the build itself: bump when it changes
+            if (variant) hash.Append("variant of " + AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(type.template)));
             if (shipped) {
                 hash.Append(g.mapSize);
                 foreach (var map in new[] { g.metalness, g.roughness, g.occlusion, g.sheen, g.opacity }) {

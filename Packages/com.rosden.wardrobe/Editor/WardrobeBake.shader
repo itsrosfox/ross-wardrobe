@@ -159,7 +159,7 @@ Shader "Hidden/RosDen/WardrobeBake" {
             ENDCG
         }
 
-        Pass { // 4: pack: each channel from a channel of its own texture (or a value), optionally inverted
+        Pass { // 4: pack: each channel from a channel of its own texture (or a value, or one worked out from it), optionally inverted
             CGPROGRAM
             #pragma vertex vert_img
             #pragma fragment frag
@@ -167,21 +167,44 @@ Shader "Hidden/RosDen/WardrobeBake" {
 
             sampler2D _Pack0, _Pack1, _Pack2, _Pack3;
             float4 _PackChannel;   // per output channel: 0..3 = R..A of its texture, -1 = _PackValue
+            float4 _PackMode;      // 0 = the channel as it is; from RGB: 1 = brightness, 2/3 = octahedral U/V, 4/5 = hemi-octahedral U/V of the normal
             float4 _PackInvert;
             float4 _PackValue;
 
-            float Pick(sampler2D t, float c, float invert, float value, float2 uv) {
+            // a unit normal (tangent space, plain XYZ in RGB) folded onto the octahedron, 0..1
+            float2 Octahedral(float3 n) {
+                n /= abs(n.x) + abs(n.y) + abs(n.z) + 1e-6;
+                float2 o = n.z >= 0 ? n.xy : (1.0 - abs(n.yx)) * float2(n.x >= 0 ? 1 : -1, n.y >= 0 ? 1 : -1);
+                return o * 0.5 + 0.5;
+            }
+
+            // the upper hemisphere only (tangent-space normals), turned 45°, using the whole square
+            float2 HemiOctahedral(float3 n) {
+                n.z = max(n.z, 0);
+                n.xy /= abs(n.x) + abs(n.y) + n.z + 1e-6;
+                return float2(n.x + n.y, n.x - n.y) * 0.5 + 0.5;
+            }
+
+            float Pick(sampler2D t, float c, float mode, float invert, float value, float2 uv) {
                 float4 s = tex2D(t, uv);
-                float v = c < -0.5 ? value : c < 0.5 ? s.r : c < 1.5 ? s.g : c < 2.5 ? s.b : s.a;
+                float v;
+                if (c < -0.5) v = value;
+                else if (mode < 0.5) v = c < 0.5 ? s.r : c < 1.5 ? s.g : c < 2.5 ? s.b : s.a;
+                else if (mode < 1.5) v = dot(s.rgb, float3(0.2126, 0.7152, 0.0722));
+                else {
+                    float3 n = normalize(s.rgb * 2.0 - 1.0);
+                    float2 o = mode < 3.5 ? Octahedral(n) : HemiOctahedral(n);
+                    v = fmod(mode, 2.0) < 0.5 ? o.x : o.y;
+                }
                 return invert > 0.5 ? 1.0 - v : v;
             }
 
             float4 frag (v2f_img i) : SV_Target {
                 return float4(
-                    Pick(_Pack0, _PackChannel.x, _PackInvert.x, _PackValue.x, i.uv),
-                    Pick(_Pack1, _PackChannel.y, _PackInvert.y, _PackValue.y, i.uv),
-                    Pick(_Pack2, _PackChannel.z, _PackInvert.z, _PackValue.z, i.uv),
-                    Pick(_Pack3, _PackChannel.w, _PackInvert.w, _PackValue.w, i.uv));
+                    Pick(_Pack0, _PackChannel.x, _PackMode.x, _PackInvert.x, _PackValue.x, i.uv),
+                    Pick(_Pack1, _PackChannel.y, _PackMode.y, _PackInvert.y, _PackValue.y, i.uv),
+                    Pick(_Pack2, _PackChannel.z, _PackMode.z, _PackInvert.z, _PackValue.z, i.uv),
+                    Pick(_Pack3, _PackChannel.w, _PackMode.w, _PackInvert.w, _PackValue.w, i.uv));
             }
             ENDCG
         }

@@ -51,7 +51,7 @@ namespace RosDen.Wardrobe.Editor {
         /// </summary>
         public static List<Island> GenerateIdMap(WardrobeGarment g, int size, bool createRegions) {
             if (g.mesh == null) throw new InvalidOperationException("Assign the garment's mesh first.");
-            var m = ReadMesh(g.mesh);
+            var m = ReadMesh(g.mesh, g);
             var triIsland = FindIslands(m, out int count);
 
             var islands = Enumerable.Range(0, count).Select(_ => new Island()).ToArray();
@@ -215,7 +215,7 @@ namespace RosDen.Wardrobe.Editor {
         /// </summary>
         public static void GenerateGradientMap(WardrobeGarment g, int size, GradientDirection direction) {
             if (g.mesh == null) throw new InvalidOperationException("Assign the garment's mesh first.");
-            var m = ReadMesh(g.mesh);
+            var m = ReadMesh(g.mesh, g);
             Vector3 axis = Axis(direction);
 
             var along = new float[m.vertices.Length];
@@ -287,7 +287,7 @@ namespace RosDen.Wardrobe.Editor {
 
         public static Surface SampleSurface(WardrobeGarment g, int size) {
             if (g.mesh == null) throw new InvalidOperationException("Assign the garment's mesh first.");
-            var m = ReadMesh(g.mesh);
+            var m = ReadMesh(g.mesh, g);
             var s = new Surface {
                 size = size, covered = new bool[size * size], position = new Vector3[size * size], normal = new Vector3[size * size],
                 region = Enumerable.Repeat(-1, size * size).ToArray(),
@@ -362,20 +362,27 @@ namespace RosDen.Wardrobe.Editor {
 
         // Vertices come back in the model's space (as it appears when dropped in a scene), not the mesh's own:
         // FBX imports often keep the mesh Z-up and put the axis conversion on the node.
-        private static MeshData ReadMesh(Mesh mesh) {
+        private static MeshData ReadMesh(Mesh mesh, WardrobeGarment garment) {
             var data = ReadRawMesh(mesh);
-            var matrix = ModelMatrix(mesh);
+            var matrix = ModelMatrix(mesh, garment);
             for (int i = 0; i < data.vertices.Length; i++) data.vertices[i] = matrix.MultiplyPoint3x4(data.vertices[i]);
             for (int i = 0; i < data.normals.Length; i++) data.normals[i] = matrix.MultiplyVector(data.normals[i]).normalized;
             return data;
         }
 
-        // A mesh saved on its own (a fit's .asset) has no model around it: it sits as the garment's prefab wears it.
-        internal static Matrix4x4 ModelMatrix(Mesh mesh) {
+        // A mesh saved on its own (a fit's .asset) has no model around it: it sits as the garment's prefab wears it, or
+        // (no prefab yet) as the source model's skinned mesh it's fitted from does (the prefab is made from the source), so
+        // the maps come out the same whichever is made first.
+        internal static Matrix4x4 ModelMatrix(Mesh mesh, WardrobeGarment garment = null) {
             var model = AssetDatabase.LoadAssetAtPath<GameObject>(AssetDatabase.GetAssetPath(mesh));
             if (model != null) return ModelMatrix(mesh, model) ?? Matrix4x4.identity;
-            foreach (var g in WardrobeGarments.All.Where(g => g.mesh == mesh))
+            var garments = new[] { garment }.Where(g => g != null && g.mesh == mesh).Concat(WardrobeGarments.All.Where(g => g.mesh == mesh)).ToList();
+            foreach (var g in garments)
                 if ((g.prefab != null ? ModelMatrix(mesh, g.prefab) : null) is Matrix4x4 m) return m;
+            foreach (var g in garments) {
+                var skin = WardrobePrefabs.SourceSkin(g.source);
+                if (skin != null) return skin.transform.localToWorldMatrix;
+            }
             return Matrix4x4.identity;
         }
 
@@ -459,6 +466,60 @@ namespace RosDen.Wardrobe.Editor {
                 if (y > 0) Visit(i, i - size);
                 if (y < size - 1) Visit(i, i + size);
             }
+        }
+
+        // ---------------------------------------------------------------- regions from another fit
+
+        /// <summary>What copying regions from another fit did: parts placed, parts left in none, regions it found no part for.</summary>
+        public class RegionCopy {
+            public int placed, unplaced;
+            public List<string> empty = new List<string>();
+        }
+
+        /// <summary>
+        /// Copy From Another Fit: the regions of another fit of the garment (the same pattern on another avatar, so the same
+        /// UVs), with each part of this fit's ID map in the region most of its texels are in on the other fit's ID map.
+        /// Replaces this fit's regions (names in the other fit's order, so its looks apply); parts the other fit doesn't
+        /// cover stay in none. Doesn't save.
+        /// </summary>
+        public static RegionCopy CopyRegions(WardrobeGarment to, WardrobeGarment from) {
+            if (to.idMap == null) throw new InvalidOperationException("Make this garment's ID map first.");
+            if (from.idMap == null || from.regions.Count == 0) throw new InvalidOperationException($"{from.name} has no ID map or regions to copy.");
+            var parts = WardrobeBaker.GetParts(to);
+            int Key(Color32 c) => (c.r << 16) | (c.g << 8) | c.b;
+            var partIndex = new Dictionary<int, int>();
+            for (int i = 0; i < parts.Count; i++) partIndex[Key(parts[i].color)] = i;
+            var regionOf = new Dictionary<int, int>();
+            for (int r = 0; r < from.regions.Count; r++)
+                foreach (var c in from.regions[r].ids) regionOf[Key(c)] = r;
+
+            var target = WardrobeBaker.SourcePixels(to.idMap, out int tw, out int th);
+            var source = WardrobeBaker.SourcePixels(from.idMap, out int sw, out int sh);
+            var votes = new int[parts.Count, from.regions.Count];
+            for (int y = 0; y < th; y++) {
+                int sy = Mathf.Min(sh - 1, (int)((y + 0.5f) / th * sh));
+                for (int x = 0; x < tw; x++) {
+                    if (!partIndex.TryGetValue(Key(target[y * tw + x]), out int part)) continue;   // black, or an anti-aliased edge
+                    int sx = Mathf.Min(sw - 1, (int)((x + 0.5f) / tw * sw));
+                    if (regionOf.TryGetValue(Key(source[sy * sw + sx]), out int region)) votes[part, region]++;
+                }
+            }
+
+            var copy = new RegionCopy();
+            var regions = from.regions.Select(r => new WardrobeRegion { name = r.name }).ToList();
+            for (int p = 0; p < parts.Count; p++) {
+                int best = -1;
+                for (int r = 0; r < regions.Count; r++)
+                    if (votes[p, r] > 0 && (best < 0 || votes[p, r] > votes[p, best])) best = r;
+                if (best < 0) copy.unplaced++;
+                else {
+                    regions[best].ids.Add(parts[p].color);
+                    copy.placed++;
+                }
+            }
+            copy.empty = regions.Where(r => r.ids.Count == 0).Select(r => r.name).ToList();
+            to.regions = regions;
+            return copy;
         }
     }
 }

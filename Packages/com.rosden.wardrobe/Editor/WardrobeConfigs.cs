@@ -67,6 +67,29 @@ namespace RosDen.Wardrobe.Editor {
             return relative;
         }
 
+        /// <summary>How a config file refers to a project path: relative when it's in the file's folder (or below), else as it is.</summary>
+        public static string RelativePath(string configPath, string assetPath) {
+            string dir = Path.GetDirectoryName(configPath).Replace('\\', '/') + "/";
+            return assetPath.StartsWith(dir) ? assetPath.Substring(dir.Length) : assetPath;
+        }
+
+        /// <summary>An id made of words: lower case, words joined by dashes ("Ros' den", "T-Shirt" → "rosden.t-shirt").</summary>
+        public static string Slug(string text) {
+            var sb = new System.Text.StringBuilder();
+            foreach (char c in (text ?? "").Trim().ToLowerInvariant()) {
+                if (char.IsLetterOrDigit(c)) sb.Append(c);
+                else if ((c == ' ' || c == '-' || c == '_' || c == '.') && sb.Length > 0 && sb[sb.Length - 1] != '-') sb.Append('-');
+            }
+            return sb.ToString().Trim('-');
+        }
+
+        /// <summary>The id to suggest for a new file: "author.name" ("Ros' den", "Ros' T-Shirt" → "rosden.ros-t-shirt").</summary>
+        public static string SuggestId(string author, string name) {
+            string a = Slug(author).Replace("-", ""), n = Slug(name);
+            if (n.Length == 0) n = "unnamed";
+            return a.Length > 0 ? $"{a}.{n}" : n;
+        }
+
         /// <summary>The asset a config file names ("path" or "path#sub-asset name"), or null.</summary>
         public static T Load<T>(string configPath, string path) where T : Object {
             if (string.IsNullOrWhiteSpace(path)) return null;
@@ -171,6 +194,7 @@ namespace RosDen.Wardrobe.Editor {
             if (imported.Length + deleted.Length + moved.Length > 0) {
                 WardrobePatterns.Forget();
                 WardrobeThumbnails.ForgetDependencies();
+                WardrobeChecks.Forget();
             }
         }
     }

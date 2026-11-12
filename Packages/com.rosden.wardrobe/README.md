@@ -63,21 +63,34 @@ These only change the avatar in the editor. In-game its own menu can still chang
 
 Ros' Wardrobe is driven by small config files it finds anywhere in the project and connects by their ids, so
 anyone can add to what's there: a pattern for someone else's garment only has to name that garment (and the
-avatar its fit is for). The window's **Setup** tab lists the project's garments, avatar bases and material
-types, makes new ones and edits them; selecting a file edits it in the Inspector too (**Assets → Create → Ros'
-Wardrobe** makes the other kinds).
+avatar its fit is for). The window's **Setup** tab lists the project's avatar bases, garments, material types,
+patterns and presets, makes new ones and sets each up step by step; selecting a file shows the same setup in the
+Inspector (**Assets → Create → Ros' Wardrobe** makes them too). Its **Checks** go through every file and say what's
+missing or wrong (a map imported as sRGB, a fit that's out of date, a region with no parts, a control that sets a
+shape key the avatar doesn't have…), most with a button that fixes it.
 
 The workflow keeps your tools' exports as they are: export from your cloth tool (e.g. Marvelous Designer) straight
-into the garment's folder, overwriting the last export, and press the two buttons below again. Keep the cloth
-tool's project in a `Source~` folder next to it (Unity ignores folders ending in `~`).
+into the garment's folder, overwriting the last export, and press the buttons below again. Keep the cloth tool's
+project in a `Source~` folder next to it (Unity ignores folders ending in `~`).
 
-A garment is one `.rgarm` per avatar fit:
+An **avatar base** (`.ravt`) starts from its model: drop it in and the body and its shape keys are read from it.
+A table of every body shape key picks the ones buyers get a slider for (*Control*) and the ones garments change shape
+with (*Follow*), with a preview slider on the avatar in the scene; toggles and choices are made from what's set on
+the avatar (*From Scene*); and bones garments shouldn't move with are picked from its skeleton.
 
-0. **Garment**: id, name, version, category (Tops, Bottoms, …), slot, the prefab the window puts on the avatar,
-   and a thumbnail (leave it empty to have it rendered from the garment).
-1. **Avatar**: the base it's fitted to (a `.ravt`). The window only lists it for avatars built on that base.
-2. **Fit to Avatar**: the *Source Model* is the garment as your cloth tool exports it, rigged to the avatar's
-   skeleton. *Fit to Avatar* makes `<Garment>.asset` next to the `.rgarm`: that mesh with a copy of each body shape
+A **garment** is one `.rgarm` per avatar fit, in steps:
+
+1. **Garment**: id, name, version, category (Tops, Bottoms, …), slot and a thumbnail (leave it empty to have it
+   rendered from the garment).
+2. **Avatar and cloth export**: the base it's fitted to (the window only lists it for avatars built on that base),
+   and the *Source Model*, the garment as your cloth tool exports it, rigged to the avatar's skeleton. Its maps are
+   found from the textures next to it. *Hides on Body* lists the body's shape keys that hide skin under it: only
+   suggestions, which the Avatar section offers while the garment is worn. Neither the window nor the garment's
+   own setup changes the body unless you say so.
+3. **Maps**: the base colour and normal map (with a DirectX switch that flips its green on import), and where its
+   metalness, roughness, occlusion, opacity (and sheen) are: a channel of a texture (optionally inverted, e.g.
+   smoothness for roughness) or a value. Point them at your tools' textures as they are.
+4. **Fit to Avatar** makes `<Garment>.asset` next to the `.rgarm`: the export's mesh with a copy of each body shape
    key garments follow (so it changes shape with the body sliders), and with weights on bones it shouldn't follow
    (the tail, say) moved to the bone the `.ravt` names. It becomes the garment's mesh and the prefab wears it.
    Fitting again overwrites it in place.
@@ -91,21 +104,27 @@ A garment is one `.rgarm` per avatar fit:
    avatar after that, the Avatar section's Clearance fixes. (In the `.rgarm`: `sims`, each a `source` and the
    `shapes` it was made with, `{ "breasts": 100 }`; an export at 50 as well is an in-between, and one with several
    keys on is a corrective for that mix.)
-3. **Material**: which material type (`.rmat`) it starts in. Buyers can pick any type that fits it. *Make
+5. **Prefab**: *Make Prefab* makes `<Garment>.prefab` from the export and the fit, with VRCFury's Armature Link,
+   a Blendshape Link to the body and a menu toggle (at *Menu Path*).
+6. **Material**: which material type (`.rmat`) it starts in. Buyers can pick any type that fits it. *Make
    Material* writes `<Garment> (<Type>).mat` next to the `.rgarm` from the maps, packing them into the textures
-   the type wants (at most *Packed Map Size*), and puts it on the prefab, so the garment ships in it. It uses the
-   pack's own copy of the type's shader when there is one, so buyers don't need Ros' Wardrobe.
-4. **Maps**: the mesh, base colour and normal map, and where its metalness, roughness, occlusion, sheen (and
-   opacity) are: a channel of a texture (optionally inverted, e.g. smoothness for roughness) or a value. Point
-   them at your tools' textures as they are; *Make Material* imports the normal map as one and the others as linear.
-5. **ID map**: one flat colour per part. *Generate from UV islands* makes one from the mesh (one colour per
-   UV island), or paint your own (e.g. Substance Painter). Black means "never recoloured". Anti-aliased edges are fine.
-6. **Gradient map**: 16-bit grayscale saying where each pixel sits along a gradient (black = start, white =
-   end). *Generate* makes one along an axis of the mesh, or paint your own and import it as R16.
-7. **Regions**: names the buyer sees (Body, Sleeves, Collar…). Each region combines one or more parts of the ID
-   map: pick a region per part under **Parts**. *One Region per Part* is a quick start.
-8. **Presets**: put the garment on, set up a look, *Save as Preset…*, and move the `.rpre` next to the
-   garment so it ships with it.
+   the type wants (at most *Packed Map Size*), and puts it on the prefab, so the garment ships in it.
+7. **Recolouring**: *Make Maps* makes the ID map (one flat colour per UV island; black means "never recoloured")
+   and the gradient map (16-bit grayscale: where each pixel sits along a gradient), or paint your own. Then the
+   **regions**, the names buyers see (Body, Sleeves, Collar…), each combining one or more parts of the ID map.
+   *Copy From Another Fit…* takes them from the same garment fitted to another avatar (same UVs).
+8. **Material types, patterns and presets for it**: tick the ones that are for this garment.
+
+*Make Them* runs steps 4 to 7 in one go. For looks: put the garment on, set up a look, *Save as Preset…*, and move
+the `.rpre` next to the garment so it ships with it.
+
+A **material type** (`.rmat`) links a material you made (any shader) and says what goes in each of its textures:
+the look's colour, the normal map, or channels packed from the garment's maps, any source in any channel (R, G, B,
+A), inverted or not, including the normal map octahedrally encoded in two channels. Garments' materials are Material
+Variants of the linked material, so changes to it show on every garment in the type.
+
+A **pattern** (`.rpat`) takes its textures dropped in: what each is for is told from its name, and it's imported the
+way that needs.
 
 The generated maps and presets are editor-only data and aren't included in avatar uploads.
 
@@ -114,9 +133,9 @@ The generated maps and presets are editor-only data and aren't included in avata
 All of them are json with a stable `id`. Paths in them are relative to the file.
 
 - **.rgarm**: a garment fit, as above (`avatar` is `{ "id", "version" }`, `material` the `.rmat` id it starts in,
-  `maps` its textures and channels, `bodyHides` the body shape keys that hide skin under it: suggestions only, which
-  the Avatar section lists while the garment is worn for you to turn on. Neither the window nor the garment's own setup
-  changes the body.
+  `maps` its textures and channels, `menu` where Make Prefab puts its toggle, `bodyHides` the body shape keys that
+  hide skin under it: suggestions only, which the Avatar section lists while the garment is worn for you to turn on.
+  Neither the window nor the garment's own setup changes the body.
 - **.ravt**: an avatar base: `name`, the `guids` of its model and prefabs, and `matches`, words in an avatar's
   name or model that mean it's built on this base (for copies the guids don't catch). Optionally, for the Avatar
   section:
@@ -129,11 +148,13 @@ All of them are json with a stable `id`. Paths in them are relative to the file.
     or `options` (a choice: each a `name` and the `set` it applies; options named exactly `Off` and `On` show as a
     toggle). Keys in a `set` are a body shape key (`"Buff": 100`), another renderer's (`"Tail:Thin": 100`), or an
     object's path under the avatar with `true`/`false` (shown or hidden).
-- **.rmat**: a material type: a `shader` name or a `template` material to copy, and `textures`, what goes in each
-  texture `property`: `"albedo"` (the recoloured base colour), `"normal"`, or 4 channels, each one of `metalness`,
-  `roughness`, `smoothness`, `occlusion`, `sheen`, `opacity`, `albedo.r/g/b` or a number. `alsoOn` sets the same
-  texture on more properties, `keyword` turns a shader keyword on with it. Ros' Wardrobe packs a texture per
-  garment when its own maps aren't laid out that way already. `floats`, `colors` and `keywords` are set on the
+- **.rmat**: a material type: a `template` material it links (its materials are Material Variants of it unless
+  `follow` is `false`) or a `shader` name, and `textures`, what goes in each texture `property`: `"albedo"` (the
+  recoloured base colour), `"normal"`, or 4 channels, each one of `metalness`, `roughness`, `smoothness`,
+  `occlusion`, `sheen`, `opacity`, `albedo.r/g/b/luminance`, `normal.x/y/z`, `normal.oct.u/v`, `normal.hemioct.u/v`,
+  a number, or `{ "from": <one of those>, "invert": true }`. `alsoOn` sets the same texture on more properties,
+  `keyword` turns a shader keyword on with it. Ros' Wardrobe packs a texture per garment when its own maps aren't
+  laid out that way already. `floats`, `colors` and `keywords` are set on the
   material too, and `garments` limits it to some garments (none = any). The package ships `PBR.rmat`: Unity's
   Standard lighting with both sides of the cloth drawn (its own small shader, as Standard always hides back faces).
 - **.rpat**: a pattern (`name`, `group`, up to 4 `colors` slots, each optionally `canGradient`), its `type`, and

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -7,8 +8,10 @@ using Object = UnityEngine.Object;
 
 namespace RosDen.Wardrobe.Editor {
     /// <summary>
-    /// Edits one .rgarm: the author-side setup of a garment fit (its avatar, maps, ID/gradient maps and regions). It
-    /// edits a copy of the garment; Save writes it into the file, which imports the garment again.
+    /// Edits one .rgarm as a guided setup, one step after the other: the garment's details, the avatar it's for and the
+    /// cloth tool's export (with its maps found next to it), the maps, Fit to Avatar, the prefab, the shipped material, the
+    /// recolouring maps and regions, and which material types, patterns and presets are for it. It edits a copy of the
+    /// garment; Save writes it into the file. The buttons that make something (fit, prefab, material, maps) save it too.
     /// </summary>
     internal class WardrobeGarmentForm : WardrobeForm {
         private static readonly int[] Sizes = { 512, 1024, 2048, 4096 };
@@ -17,6 +20,9 @@ namespace RosDen.Wardrobe.Editor {
         private static readonly int[] ChannelValues = { 0, 1, 2, 3 };
         private static readonly int[] MapSizes = { 0, 512, 1024, 2048, 4096 };
         private static readonly GUIContent[] MapSizeNames = MapSizes.Select(s => new GUIContent(s == 0 ? "The base colour's" : s.ToString())).ToArray();
+        private static readonly string[] Categories = { "Tops", "Bottoms", "Outerwear", "Full Body", "Underwear", "Shoes", "Socks", "Headwear", "Accessories" };
+        private static readonly string[] Slots = { "Top", "Bottom", "Jacket", "Full Body", "Underwear", "Shoes", "Socks", "Hat", "Gloves" };
+        private static readonly string[] RegionNames = { "Body", "Front", "Back", "Sleeves", "Collar", "Cuffs", "Hem", "Hood", "Pocket", "Trim", "Lining", "Buttons", "Laces", "Sole", "Waistband" };
         private static int _idSize = 2048, _gradientSize = 2048;
         private static WardrobeGenerators.GradientDirection _direction;
 
@@ -24,9 +30,11 @@ namespace RosDen.Wardrobe.Editor {
         private SerializedObject _so;
         private string _saved, _text, _error;
         private int _dirtyCount = -1, _revision;
-        private bool _showMore;
         private WardrobeFitter.Report _fit;
-        private string _newShape;
+        private string _newShape, _usageSearch = "";
+        private bool _mapsMore, _patternsOpen;
+        private int _usageRevision = -1;
+        private List<(string path, string kind, string type, JsonObject json)> _usage;
 
         public WardrobeGarmentForm(string path) : base(path) => Revert();
 
@@ -60,6 +68,7 @@ namespace RosDen.Wardrobe.Editor {
 
         public override void Save() {
             if (_draft == null) return;
+            _so?.ApplyModifiedProperties();
             WardrobeGarments.Save(_draft, path);
             _saved = _text = WardrobeGarments.Text(_draft, path);
             _dirtyCount = EditorUtility.GetDirtyCount(_draft);
@@ -71,6 +80,20 @@ namespace RosDen.Wardrobe.Editor {
             _so = null;
             WardrobeGarments.Release(_draft);
             _draft = null;
+        }
+
+        // A step's button: runs after the GUI has drawn, on the copy, and saves the garment after (so what it made is kept).
+        private void Act(string label, Action<WardrobeGarment> action) {
+            Later(label, () => {
+                if (_draft == null) return;
+                _so.ApplyModifiedProperties();
+                try {
+                    action(_draft);
+                } finally {
+                    if (_draft != null) Save();
+                    WardrobeChecks.Forget();
+                }
+            });
         }
 
         // ---------------------------------------------------------------- drawing
@@ -87,64 +110,346 @@ namespace RosDen.Wardrobe.Editor {
             }
             var g = _draft;
             _so.Update();
+            var avatar = WardrobeAvatars.Get(g.avatarId);
+            var type = WardrobeMaterialTypes.For(g, g.defaultMaterial);
 
-            Header("Garment");
-            Field("displayName", "Name");
-            Field("id", "Id");
-            if (string.IsNullOrWhiteSpace(g.id))
-                EditorGUILayout.HelpBox("Give the garment an id (e.g. yourname.t-shirt) so patterns made for it can find it.", MessageType.Warning);
-            else if (WardrobeGarments.All.Any(o => WardrobeConfigs.SameId(o.id, g.id) && WardrobeConfigs.SameId(o.avatarId, g.avatarId) &&
-                                                   WardrobeGarments.PathOf(o) != path))
-                EditorGUILayout.HelpBox($"Another .rgarm is {g.id} on the same avatar; only one of them is used.", MessageType.Warning);
-            Field("version");
-            Field("author");
-            Field("category");
-            Field("slot");
-            Field("bodyHides", "Hides on body");
-            Field("prefab");
-            Field("thumbnail");
+            bool details = !string.IsNullOrWhiteSpace(g.id) && !string.IsNullOrWhiteSpace(g.displayName);
+            bool source = avatar != null && g.source != null && WardrobeFitter.Problem(g) == null;
+            bool fitted = g.mesh != null && AssetDatabase.GetAssetPath(g.mesh) == WardrobeFitter.FitPath(g);
+            bool fitDone = WardrobeFitter.UpToDate(g);
+            bool prefabDone = g.prefab != null && WardrobePrefabs.Mismatch(g) == null;
+            bool shipped = type != null && File.Exists(WardrobeMaterialTypes.ShippedPath(g, type));
+            bool shipDone = shipped && WardrobeMaterialTypes.ShippedUpToDate(g, type);
+            bool recolour = g.idMap != null && g.regions.Count > 0;
 
-            EditorGUILayout.Space();
-            Header("Avatar");
-            Note("The avatar base this fit is for. Fits of the same garment for other avatars are their own .rgarm files with the same id.");
+            DrawMakeRest(g, source, fitDone, type, shipDone);
+
+            Step(1, "Garment", details ? StepState.Done : StepState.Attention, details ? g.id : "name and id");
+            DrawDetails(g);
+
+            Step(2, "Avatar and cloth export", source ? StepState.Done : StepState.Attention,
+                avatar != null ? avatar.DisplayName : "pick the avatar");
             DrawAvatar(g);
+            DrawSource(g, avatar);
 
-            EditorGUILayout.Space();
-            Header("Fit to Avatar");
-            DrawFit(g);
+            Step(3, "Maps", g.baseColor != null ? StepState.Done : StepState.Attention, g.baseColor != null ? null : "base colour missing");
+            DrawTextures(g);
 
-            EditorGUILayout.Space();
-            Header("Material");
+            Step(4, "Fit to avatar", fitDone ? StepState.Done : source ? StepState.Attention : StepState.Todo,
+                fitDone ? "up to date" : fitted ? "out of date" : "not fitted");
+            DrawFit(g, avatar);
+
+            Step(5, "Prefab", prefabDone ? StepState.Done : fitDone || g.mesh != null ? StepState.Attention : StepState.Todo,
+                g.prefab != null ? g.prefab.name : "not made");
+            DrawPrefab(g);
+
+            Step(6, "Material", shipDone ? StepState.Done : type != null && g.baseColor != null ? StepState.Attention : StepState.Todo,
+                type != null ? type.DisplayName : "no material type");
             DrawMaterial(g);
-            DrawShipped(g);
+            DrawShipped(g, type);
 
-            EditorGUILayout.Space();
-            Header("Maps");
-            Field("mesh");
-            Field("baseColor", "Base Colour");
-            Field("normalMap", "Normal");
-            MapChannel("metalness", "Metalness");
-            MapChannel("roughness", "Roughness", "Pick the channel and tick Inverted for a smoothness map");
-            MapChannel("occlusion", "Occlusion");
-            MapChannel("sheen", "Sheen", "How much rim light / sheen the toon material gives the cloth");
-            MapChannel("opacity", "Opacity", "Without a texture: the base colour's alpha");
-            _so.ApplyModifiedProperties();
-
-            EditorGUILayout.Space();
-            Header("Recolouring");
+            Step(7, "Recolouring", recolour ? StepState.Done : g.mesh != null ? StepState.Attention : StepState.Todo,
+                recolour ? $"{g.regions.Count} regions" : "no ID map");
             DrawMaps(g);
-            EditorGUILayout.Space();
             DrawRegions(g);
 
-            EditorGUILayout.Space();
-            _showMore = EditorGUILayout.Foldout(_showMore, "Patterns and presets for it", true);
-            if (_showMore) DrawUsage(g);
+            Step(8, "Material types, patterns and presets for it", StepState.Done);
+            DrawUsage(g);
+        }
+
+        // One button for every step that's left (when they can run): fit, prefab, material, recolour maps.
+        private void DrawMakeRest(WardrobeGarment g, bool source, bool fitDone, WardrobeMaterialType type, bool shipDone) {
+            var left = new List<string>();
+            if (source && !fitDone) left.Add("fit");
+            if (g.prefab == null && (source || g.mesh != null) && WardrobePrefabs.Problem(g) == null) left.Add("prefab");
+            if (type != null && g.baseColor != null && !shipDone) left.Add("material");
+            if (g.idMap == null && (g.mesh != null || source)) left.Add("ID map");
+            if (g.gradientMap == null && (g.mesh != null || source)) left.Add("gradient map");
+            if (left.Count < 2) return;
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox)) {
+                EditorGUILayout.LabelField($"Left to make: {string.Join(", ", left)}.", EditorStyles.wordWrappedMiniLabel);
+                if (GUILayout.Button(new GUIContent("Make Them", "Runs steps 4 to 7 in order and saves the garment"), GUILayout.Width(100), GUILayout.Height(22)))
+                    Act($"Making {Title(g)}…", d => {
+                        if (WardrobeFitter.Problem(d) == null && !WardrobeFitter.UpToDate(d)) _fit = WardrobeFitter.Fit(d);
+                        if (d.prefab == null && WardrobePrefabs.Problem(d) == null) WardrobePrefabs.Make(d);
+                        var t = WardrobeMaterialTypes.For(d, d.defaultMaterial);
+                        if (t != null && d.baseColor != null && !WardrobeMaterialTypes.ShippedUpToDate(d, t)) WardrobeMaterialTypes.Ship(d, t);
+                        if (d.mesh != null && d.idMap == null) WardrobeGenerators.GenerateIdMap(d, _idSize, d.regions.Count == 0);
+                        if (d.mesh != null && d.gradientMap == null) WardrobeGenerators.GenerateGradientMap(d, _gradientSize, _direction);
+                    });
+            }
         }
 
         private void Field(string name, string label = null) {
             var p = _so.FindProperty(name);
             if (label == null) EditorGUILayout.PropertyField(p);
             else EditorGUILayout.PropertyField(p, new GUIContent(label, p.tooltip));
+        }
+
+        // A string field with a ▾ of suggestions (and the values other garments use).
+        private void Suggested(string name, string label, IEnumerable<string> common, Func<WardrobeGarment, string> used) {
+            var p = _so.FindProperty(name);
+            var options = common.Concat(WardrobeGarments.All.Select(used)).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase).Select(s => (s, s));
+            EditorGUI.BeginChangeCheck();
+            string value = Suggest(new GUIContent(label, p.tooltip), p.stringValue, options, v => {
+                p.stringValue = v;
+                _so.ApplyModifiedProperties();
+            });
+            if (EditorGUI.EndChangeCheck()) p.stringValue = value;
+        }
+
+        // ---------------------------------------------------------------- 1. details
+
+        private void DrawDetails(WardrobeGarment g) {
+            Field("displayName", "Name");
+            Field("id", "Id");
+            if (string.IsNullOrWhiteSpace(g.id)) {
+                EditorGUILayout.HelpBox("Give the garment an id so patterns and presets made for it find it. Fits of the same garment for other " +
+                                        "avatars use the same id.", MessageType.Warning);
+                string suggested = WardrobeConfigs.SuggestId(g.author, string.IsNullOrWhiteSpace(g.displayName) ? Path.GetFileNameWithoutExtension(path) : g.displayName);
+                using (new EditorGUILayout.HorizontalScope()) {
+                    GUILayout.Space(EditorGUIUtility.labelWidth + 2);
+                    if (GUILayout.Button($"Use {suggested}", EditorStyles.miniButton, GUILayout.ExpandWidth(false))) {
+                        _so.FindProperty("id").stringValue = suggested;
+                        GUI.FocusControl(null);
+                    }
+                }
+            } else if (WardrobeGarments.All.Any(o => WardrobeConfigs.SameId(o.id, g.id) && WardrobeConfigs.SameId(o.avatarId, g.avatarId) &&
+                                                       WardrobeGarments.PathOf(o) != path))
+                EditorGUILayout.HelpBox($"Another .rgarm is {g.id} on the same avatar; only one of them is used.", MessageType.Warning);
+            Field("version");
+            Field("author");
+            Suggested("category", "Category", Categories, o => o.category);
+            Suggested("slot", "Slot", Slots, o => o.slot);
+            Field("thumbnail");
+            _so.ApplyModifiedProperties();
+        }
+
+        // ---------------------------------------------------------------- 2. avatar and source
+
+        private void DrawAvatar(WardrobeGarment g) {
+            var avatars = WardrobeAvatars.All;
+            var options = new List<string> { "Pick the avatar base" };
+            options.AddRange(avatars.Select(a => $"{a.DisplayName}  ({a.id})".Replace("/", "∕")));
+            int index = string.IsNullOrWhiteSpace(g.avatarId) ? 0 : avatars.FindIndex(a => WardrobeConfigs.SameId(a.id, g.avatarId)) + 1;
+            bool unknown = index == 0 && !string.IsNullOrWhiteSpace(g.avatarId);
+            if (unknown) options.Add(g.avatarId + " (no .ravt here)");
+            EditorGUI.BeginChangeCheck();
+            int picked = EditorGUILayout.Popup(new GUIContent("Made For", "The avatar base (.ravt) this fit is for. Fits of the garment for other " +
+                "avatars are their own .rgarm files with the same id"), unknown ? options.Count - 1 : index, options.ToArray());
+            if (EditorGUI.EndChangeCheck() && !(unknown && picked == options.Count - 1)) {
+                _so.FindProperty("avatarId").stringValue = picked == 0 ? "" : avatars[picked - 1].id;
+                _so.ApplyModifiedProperties();
+            }
+            if (avatars.Count == 0)
+                EditorGUILayout.HelpBox("There's no avatar base (.ravt) in the project yet. Make one in the Setup tab's Avatar bases (it reads the avatar's " +
+                                        "shape keys from its model).", MessageType.Warning);
+            if (unknown)
+                EditorGUILayout.HelpBox($"No .ravt in the project has the id {g.avatarId}, so Ros' Wardrobe can't tell which avatars it fits. " +
+                                        "Make one in the Setup tab's Avatar bases, and ship it with the garment.", MessageType.Warning);
+            if (!string.IsNullOrWhiteSpace(g.avatarId)) Field("avatarVersion", "Avatar Version");
+        }
+
+        private void DrawSource(WardrobeGarment g, WardrobeAvatar avatar) {
+            Note("The garment as your cloth tool exports it (e.g. Marvelous Designer's FBX), rigged to the avatar's skeleton. Drop the export and " +
+                 "Find Maps fills step 3 from the textures next to it.");
+            EditorGUI.BeginChangeCheck();
+            Field("source", "Source Model");
+            bool changed = EditorGUI.EndChangeCheck();
+            _so.ApplyModifiedProperties();
+            if (changed && g.source != null && g.baseColor == null) FindMaps(g, false);
+            if (g.source != null) {
+                using (new EditorGUILayout.HorizontalScope()) {
+                    GUILayout.Space(EditorGUIUtility.labelWidth + 2);
+                    if (GUILayout.Button(new GUIContent("Find Maps", "Fill the maps from the textures next to the model (diffuse, normal, roughness, " +
+                            "metalness, ambient occlusion, opacity…), keeping the ones already set"), EditorStyles.miniButton, GUILayout.Width(80))) {
+                        FindMaps(g, true);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+                if (WardrobePrefabs.SourceSkin(g.source) == null)
+                    EditorGUILayout.HelpBox($"{g.source.name} has no skinned mesh: export it rigged to the avatar's skeleton.", MessageType.Error);
+            }
+            DrawHides(g, avatar);
+        }
+
+        // Shape keys of the body the garment covers: suggestions the window's Avatar section offers when it's worn.
+        private void DrawHides(WardrobeGarment g, WardrobeAvatar avatar) {
+            var body = WardrobeFitter.BodyShapes(g);
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.PrefixLabel(new GUIContent("Hides on Body", _so.FindProperty("bodyHides").tooltip));
+                if (g.bodyHides.Count == 0) GUILayout.Label("nothing", EditorStyles.miniLabel);
+                for (int i = 0; i < g.bodyHides.Count; i++) {
+                    string key = g.bodyHides[i];
+                    bool missing = body.Count > 0 && !body.Contains(key);
+                    if (GUILayout.Button(new GUIContent($"{key}{(missing ? " (not on the body)" : "")}  ✕", "Remove"), EditorStyles.miniButton, GUILayout.ExpandWidth(false))) {
+                        Changing(g, "Remove Body Hide");
+                        g.bodyHides.RemoveAt(i);
+                        Changed(g);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+                GUILayout.FlexibleSpace();
+                using (new EditorGUI.DisabledScope(body.Count == 0))
+                    if (GUILayout.Button(new GUIContent("Add", body.Count == 0 ? "Pick the avatar (with its model in the project) first" : "A body shape key that hides skin under it"),
+                            EditorStyles.miniButton, GUILayout.Width(44))) {
+                        var menu = new GenericMenu();
+                        // the keys that sound like clothing first
+                        var likely = body.Where(k => Hides(k, g)).ToList();
+                        foreach (string k in likely) AddHide(menu, g, k, "");
+                        if (likely.Count > 0) menu.AddSeparator("");
+                        foreach (string k in body.Where(k => !likely.Contains(k)))
+                            AddHide(menu, g, k, body.Count > 40 ? $"All/{char.ToUpperInvariant(k.FirstOrDefault())}/" : "All/");
+                        menu.ShowAsContext();
+                        GUIUtility.ExitGUI();
+                    }
+            }
+            if (g.bodyHides.Count > 0)
+                Note("Only suggestions: when the garment is put on, the window's Avatar section offers to turn these on. The body changes only when " +
+                     "the buyer says so.");
+        }
+
+        private void AddHide(GenericMenu menu, WardrobeGarment g, string key, string folder) {
+            bool on = g.bodyHides.Contains(key);
+            menu.AddItem(new GUIContent(folder + key.Replace("/", "∕")), on, () => {
+                Changing(g, "Body Hide");
+                if (on) g.bodyHides.Remove(key);
+                else g.bodyHides.Add(key);
+                Changed(g);
+                repaint?.Invoke();
+            });
+        }
+
+        private static bool Hides(string key, WardrobeGarment g) {
+            string k = key.ToLowerInvariant();
+            var words = new[] { "hide", "shrink", "clip", "cloth", "shirt", "pant", "sock", "shoe", "top", "under", "mask" }
+                .Concat((g.category + " " + g.slot + " " + g.displayName).ToLowerInvariant().Split(' ', '-', '_').Where(w => w.Length > 2));
+            return words.Any(k.Contains);
+        }
+
+        // ---------------------------------------------------------------- finding maps
+
+        private static readonly (string role, string[] words)[] MapWords = {
+            ("baseColor", new[] { "diffuse", "basecolor", "basecolour", "albedo", "color", "colour" }),
+            ("normalMap", new[] { "normal", "normalgl", "normaldx", "nrm", "nor", "norm" }),
+            ("metalness", new[] { "metalness", "metallic", "metal" }),
+            ("roughness", new[] { "roughness", "rough" }),
+            ("smoothness", new[] { "smoothness", "gloss", "glossiness" }),
+            ("occlusion", new[] { "ambientocclusion", "occlusion", "ao" }),
+            ("opacity", new[] { "opacity", "alpha", "transparency", "transmission" }),
+            ("sheen", new[] { "sheen" }),
+        };
+
+        private static string[] Words(string name) =>
+            name.ToLowerInvariant().Replace(" ", "_").Split('_', '-', '.').Where(w => w.Length > 0).ToArray();
+
+        // Fills the empty maps from textures next to the source model (and the .rgarm), the way cloth tools name them.
+        private void FindMaps(WardrobeGarment g, bool tell) {
+            var folders = new[] { Path.GetDirectoryName(AssetDatabase.GetAssetPath(g.source)), Path.GetDirectoryName(path) }
+                .Where(f => !string.IsNullOrEmpty(f)).Select(f => f.Replace('\\', '/')).Distinct().ToArray();
+            var mine = new HashSet<Texture2D> { g.idMap, g.gradientMap, g.thumbnail };
+            var textures = AssetDatabase.FindAssets("t:Texture2D", folders).Select(AssetDatabase.GUIDToAssetPath).Distinct()
+                .Select(p => AssetDatabase.LoadAssetAtPath<Texture2D>(p)).Where(t => t != null && !mine.Contains(t))
+                .Where(t => !Words(t.name).Any(w => w == "id" || w == "gradient" || w == "thumbnail" || w == "preview")).ToList();
+            string sourceName = g.source.name.ToLowerInvariant();
+            int Shared(Texture2D t) => t.name.ToLowerInvariant().Zip(sourceName, (a, b) => a == b).TakeWhile(x => x).Count();
+
+            // named for the role, and for no other
+            Texture2D Best(string role) {
+                var words = MapWords.First(m => m.role == role).words;
+                var others = MapWords.Where(m => m.role != role).SelectMany(m => m.words).ToList();
+                return textures.Where(t => Words(t.name).Any(words.Contains) && !Words(t.name).Any(others.Contains))
+                    .OrderByDescending(Shared).ThenBy(t => t.name.Length).FirstOrDefault();
+            }
+
+            var found = new List<string>();
+            Changing(g, "Find Maps");
+            if (g.baseColor == null && Best("baseColor") is Texture2D color) {
+                g.baseColor = color;
+                found.Add($"base colour {color.name}");
+            }
+            if (g.normalMap == null && Best("normalMap") is Texture2D normal) {
+                g.normalMap = normal;
+                found.Add($"normal {normal.name}");
+                Import(normal, ti => {
+                    if (ti.textureType == TextureImporterType.NormalMap) return false;
+                    ti.textureType = TextureImporterType.NormalMap;
+                    return true;
+                });
+            }
+            void Channel(MapChannel map, string role, string label, bool invert = false) {
+                if (map.texture != null) return;
+                var t = Best(role);
+                if (t == null) return;
+                map.texture = t;
+                map.channel = TextureChannel.R;
+                map.invert = invert;
+                found.Add($"{label} {t.name}{(invert ? " (inverted)" : "")}");
+                Import(t, ti => {
+                    if (!ti.sRGBTexture) return false;
+                    ti.sRGBTexture = false;
+                    return true;
+                });
+            }
+            Channel(g.metalness, "metalness", "metalness");
+            Channel(g.roughness, "roughness", "roughness");
+            if (g.roughness.texture == null) Channel(g.roughness, "smoothness", "roughness from smoothness", true);
+            Channel(g.occlusion, "occlusion", "occlusion");
+            Channel(g.opacity, "opacity", "opacity");
+            Channel(g.sheen, "sheen", "sheen");
+            Changed(g);
+            if (tell)
+                EditorUtility.DisplayDialog("Ros' Wardrobe", found.Count == 0
+                    ? $"Found no new maps next to {g.source.name}. Set them in step 3 by hand."
+                    : "Found:\n• " + string.Join("\n• ", found) + "\n\nCheck them in step 3.", "OK");
+        }
+
+        private static void Import(Texture2D texture, Func<TextureImporter, bool> change) {
+            if (AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(texture)) is TextureImporter ti && change(ti)) ti.SaveAndReimport();
+        }
+
+        // ---------------------------------------------------------------- 3. maps
+
+        private void DrawTextures(WardrobeGarment g) {
+            Note("Keep the maps as your tools export them; Make Material packs them the way each material needs. Pick the channel a map is in " +
+                 "(ORM textures hold occlusion, roughness and metalness in R, G and B), and tick Inverted for a smoothness map.");
+            Field("baseColor", "Base Colour");
+            Field("normalMap", "Normal");
+            _so.ApplyModifiedProperties();
+            if (g.normalMap != null && AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(g.normalMap)) is TextureImporter ti) {
+                EditorGUI.indentLevel++;
+                if (ti.textureType != TextureImporterType.NormalMap) {
+                    using (new EditorGUILayout.HorizontalScope()) {
+                        EditorGUILayout.HelpBox("It isn't imported as a normal map.", MessageType.Warning);
+                        if (GUILayout.Button("Fix", GUILayout.Width(44), GUILayout.Height(38)))
+                            Import(g.normalMap, i => {
+                                i.textureType = TextureImporterType.NormalMap;
+                                return true;
+                            });
+                    }
+                } else {
+                    EditorGUI.BeginChangeCheck();
+                    bool flip = EditorGUILayout.Toggle(new GUIContent("DirectX (Green Down)", "Tick when the normal map is DirectX style (its green " +
+                        "channel points down, as Substance's and Unreal's do): Unity flips it on import"), ti.flipGreenChannel);
+                    if (EditorGUI.EndChangeCheck()) {
+                        ti.flipGreenChannel = flip;
+                        ti.SaveAndReimport();
+                    }
+                }
+                EditorGUI.indentLevel--;
+            }
+            MapChannel("roughness", "Roughness", "Tick Inverted for a smoothness (gloss) map");
+            MapChannel("metalness", "Metalness");
+            MapChannel("occlusion", "Occlusion");
+            MapChannel("opacity", "Opacity", "Without a texture: the base colour's alpha");
+            _mapsMore = EditorGUILayout.Foldout(_mapsMore, "More", true);
+            if (_mapsMore) {
+                EditorGUI.indentLevel++;
+                MapChannel("sheen", "Sheen", "How much rim light / sheen the toon material gives the cloth");
+                EditorGUI.indentLevel--;
+            }
+            _so.ApplyModifiedProperties();
         }
 
         // A texture channel, or a value without a texture.
@@ -156,7 +461,8 @@ namespace RosDen.Wardrobe.Editor {
             if (texture.objectReferenceValue != null) {
                 var channel = p.FindPropertyRelative("channel");
                 using (new EditorGUILayout.HorizontalScope()) {
-                    channel.intValue = EditorGUILayout.IntPopup(new GUIContent("Channel"), Mathf.Clamp(channel.intValue, 0, 3), Channels, ChannelValues);
+                    channel.intValue = EditorGUILayout.IntPopup(new GUIContent("Channel", "Which channel of the texture holds it"), Mathf.Clamp(channel.intValue, 0, 3),
+                        Channels, ChannelValues);
                     var invert = p.FindPropertyRelative("invert");
                     invert.boolValue = EditorGUILayout.ToggleLeft(new GUIContent("Inverted", invert.tooltip), invert.boolValue, GUILayout.Width(80));
                 }
@@ -166,65 +472,24 @@ namespace RosDen.Wardrobe.Editor {
             EditorGUI.indentLevel--;
         }
 
-        private void DrawAvatar(WardrobeGarment g) {
-            var avatars = WardrobeAvatars.All;
-            var options = new List<string> { "Any avatar" };
-            options.AddRange(avatars.Select(a => $"{a.DisplayName}  ({a.id})".Replace("/", "∕")));
-            int index = string.IsNullOrWhiteSpace(g.avatarId) ? 0 : avatars.FindIndex(a => WardrobeConfigs.SameId(a.id, g.avatarId)) + 1;
-            bool unknown = index == 0 && !string.IsNullOrWhiteSpace(g.avatarId);
-            if (unknown) options.Add(g.avatarId + " (no .ravt here)");
-            EditorGUI.BeginChangeCheck();
-            int picked = EditorGUILayout.Popup(new GUIContent("Made For", "The avatar base's .ravt"), unknown ? options.Count - 1 : index, options.ToArray());
-            if (EditorGUI.EndChangeCheck() && !(unknown && picked == options.Count - 1)) {
-                _so.FindProperty("avatarId").stringValue = picked == 0 ? "" : avatars[picked - 1].id;
-            }
-            Field("avatarId", "Avatar Id");
-            Field("avatarVersion", "Avatar Version");
-            if (unknown)
-                EditorGUILayout.HelpBox($"No .ravt in the project has the id {g.avatarId}, so Ros' Wardrobe can't tell which avatars it fits. " +
-                                        "Make one with Assets → Create → Ros' Wardrobe → Avatar Base, and ship it with the garment.", MessageType.Warning);
-        }
+        // ---------------------------------------------------------------- 4. fit
 
-        private void DrawMaterial(WardrobeGarment g) {
-            var types = WardrobeMaterialTypes.All.Where(t => t.Fits(g)).ToList();
-            var options = new List<string> { "The first that fits" };
-            options.AddRange(types.Select(t => t.DisplayName + (t.Problem != null ? " (can't be used)" : "")));
-            int index = string.IsNullOrWhiteSpace(g.defaultMaterial) ? 0 : types.FindIndex(t => WardrobeConfigs.SameId(t.id, g.defaultMaterial)) + 1;
-            if (index == 0 && !string.IsNullOrWhiteSpace(g.defaultMaterial)) {
-                options.Add(g.defaultMaterial + " (not in the project)");
-                index = options.Count - 1;
-            }
-            EditorGUI.BeginChangeCheck();
-            int picked = EditorGUILayout.Popup(new GUIContent("Starts In", "The material type (.rmat) the garment starts in"), index, options.ToArray());
-            if (EditorGUI.EndChangeCheck() && picked <= types.Count) _so.FindProperty("defaultMaterial").stringValue = picked == 0 ? "" : types[picked - 1].id;
-            if (types.Count == 0)
-                EditorGUILayout.HelpBox("No material type (.rmat) in the project is for this garment, so it can't be recoloured. Ros' Wardrobe ships PBR; " +
-                                        "make others with Assets → Create → Ros' Wardrobe → Material Type.", MessageType.Warning);
-            foreach (var t in types.Where(t => t.Problem != null)) EditorGUILayout.HelpBox(t.Problem, MessageType.Warning);
-            if (types.Count > 0)
-                Note($"Buyers can pick: {string.Join(", ", types.Where(t => t.Problem == null).Select(t => t.DisplayName))}. Each .rmat lists the garments it's for.");
-        }
-
-        private void DrawFit(WardrobeGarment g) {
-            Note("The garment as your cloth tool exports it (e.g. Marvelous Designer's FBX), rigged to the avatar's skeleton. Fit makes " +
-                 $"'{WardrobeAssets.FileName(WardrobeAssets.BaseName(g))}.asset' next to the .rgarm from it: the mesh the prefab wears, with " +
-                 "the body's shape keys so it follows the body. After a new export, overwrite the file and fit again.");
-            Field("source", "Source Model");
-            _so.ApplyModifiedProperties();
+        private void DrawFit(WardrobeGarment g, WardrobeAvatar avatar) {
+            Note($"Fit makes '{WardrobeAssets.FileName(WardrobeAssets.BaseName(g))}.asset' next to the .rgarm from the source model: the mesh the " +
+                 "prefab wears, with the body's shape keys so it follows the body. After a new export, overwrite the file and fit again.");
             string problem = WardrobeFitter.Problem(g);
             if (problem != null) {
                 EditorGUILayout.HelpBox(problem, MessageType.Info);
                 return;
             }
-            var avatar = WardrobeAvatars.Get(g.avatarId);
             DrawShapes(g, avatar);
             bool fitted = g.mesh != null && AssetDatabase.GetAssetPath(g.mesh) == WardrobeFitter.FitPath(g);
             bool upToDate = WardrobeFitter.UpToDate(g);
             using (new EditorGUILayout.HorizontalScope()) {
                 EditorGUILayout.LabelField(upToDate ? "Up to date." : fitted ? "Out of date: the source model or the avatar base changed." : "Not fitted yet.",
                     EditorStyles.wordWrappedMiniLabel);
-                if (GUILayout.Button(fitted ? "Fit Again" : "Fit to Avatar", GUILayout.Width(100)))
-                    Later($"Fitting {Title(g)} to {avatar.DisplayName}…", () => _fit = WardrobeFitter.Fit(g));
+                if (GUILayout.Button(new GUIContent(fitted ? "Fit Again" : "Fit to Avatar", "Fits it and saves the garment"), GUILayout.Width(100)))
+                    Act($"Fitting {Title(g)} to {avatar.DisplayName}…", d => _fit = WardrobeFitter.Fit(d));
             }
             if (_fit == null) return;
             if (_fit.added.Count > 0) Note("Copied: " + string.Join(", ", _fit.added.Select(a => $"{a.shape} ({a.mm:0.#} mm)")));
@@ -239,12 +504,11 @@ namespace RosDen.Wardrobe.Editor {
         private void DrawShapes(WardrobeGarment g, WardrobeAvatar avatar) {
             var shapes = WardrobeFitter.Shapes(g);
             var body = WardrobeFitter.BodyShapes(g);
-            Note($"Body shapes: the garment gets a shape key for each of {avatar.DisplayName}'s body shape keys below, so it changes shape " +
-                 "with the body. For a better fit, give a key the garment as your cloth tool exports it with that key on the body at 100 " +
-                 "(the same garment simulated again, e.g. Marvelous Designer's Avatar → Blend Shape): its movement from the Source Model " +
-                 "becomes the key, and keys on at once add up. Without an export the garment follows the body surface under it.");
+            Note($"The garment gets a shape key for each of {avatar.DisplayName}'s body shape keys below (the avatar base's Follow list), so it " +
+                 "changes shape with the body. For a better fit, give a key the garment as your cloth tool exports it with that key on the body " +
+                 "at 100 (e.g. Marvelous Designer's Avatar → Blend Shape): its movement becomes the key. Without one it follows the body surface.");
             EditorGUI.indentLevel++;
-            if (shapes.Count == 0) Note("None: the avatar base's Fitting garments list (or its sliders) names no body shape keys.");
+            if (shapes.Count == 0) Note("None: the avatar base names no body shape keys to follow (its step 3).");
             foreach (string shape in shapes) {
                 var own = g.sims?.Where(s => s != null && s.shapes.Count == 1 && s.shapes[0].shape == shape).OrderBy(s => s.shapes[0].weight).ToList()
                           ?? new List<WardrobeSim>();
@@ -294,57 +558,129 @@ namespace RosDen.Wardrobe.Editor {
             Changed(g);
         }
 
-        private void DrawShipped(WardrobeGarment g) {
-            var type = WardrobeMaterialTypes.For(g, g.defaultMaterial);
+        // ---------------------------------------------------------------- 5. prefab
+
+        private void DrawPrefab(WardrobeGarment g) {
+            Note(WardrobePrefabs.HasVrcFury
+                ? "What buyers drop on their avatar: the fitted mesh in its material, with VRCFury's Armature Link (so it moves with the avatar), its " +
+                  "shape keys linked to the body's, and a menu toggle."
+                : "What buyers drop on their avatar: the fitted mesh in its material. VRCFury isn't in the project, so it gets no Armature Link or " +
+                  "menu toggle; add VRCFury to make one buyers can just drop on.");
+            var menu = _so.FindProperty("menuPath");
+            EditorGUI.BeginChangeCheck();
+            string value = EditorGUILayout.TextField(new GUIContent("Menu Path", menu.tooltip), menu.stringValue);
+            if (EditorGUI.EndChangeCheck()) menu.stringValue = value;
+            if (string.IsNullOrWhiteSpace(menu.stringValue)) EditorGUILayout.LabelField(" ", $"{WardrobePrefabs.MenuPath(g)}", EditorStyles.miniLabel);
+            Field("prefab", "Prefab");
+            _so.ApplyModifiedProperties();
+            string problem = WardrobePrefabs.Problem(g);
+            string mismatch = g.prefab != null ? WardrobePrefabs.Mismatch(g) : null;
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.LabelField(problem ?? (g.prefab == null ? "Not made yet." : mismatch ?? "Made."), EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUI.DisabledScope(problem != null))
+                    if (GUILayout.Button(new GUIContent(g.prefab == null ? "Make Prefab" : "Make Again", "Makes it from the source model and the fit, and saves the garment"),
+                            GUILayout.Width(100))) {
+                        if (g.prefab == null || EditorUtility.DisplayDialog("Ros' Wardrobe", $"Make {g.prefab.name} again? What was added to it by hand is lost.",
+                                "Make Again", "Cancel"))
+                            Act($"Making {Title(g)}'s prefab…", d => WardrobePrefabs.Make(d));
+                        GUIUtility.ExitGUI();
+                    }
+            }
+        }
+
+        // ---------------------------------------------------------------- 6. material
+
+        private void DrawMaterial(WardrobeGarment g) {
+            var types = WardrobeMaterialTypes.All.Where(t => t.Fits(g)).ToList();
+            var options = new List<string> { "The first that fits" };
+            options.AddRange(types.Select(t => t.DisplayName + (t.Problem != null ? " (can't be used)" : "")));
+            int index = string.IsNullOrWhiteSpace(g.defaultMaterial) ? 0 : types.FindIndex(t => WardrobeConfigs.SameId(t.id, g.defaultMaterial)) + 1;
+            if (index == 0 && !string.IsNullOrWhiteSpace(g.defaultMaterial)) {
+                options.Add(g.defaultMaterial + " (not in the project)");
+                index = options.Count - 1;
+            }
+            EditorGUI.BeginChangeCheck();
+            int picked = EditorGUILayout.Popup(new GUIContent("Starts In", "The material type (.rmat) the garment starts and ships in"), index, options.ToArray());
+            if (EditorGUI.EndChangeCheck() && picked <= types.Count) {
+                _so.FindProperty("defaultMaterial").stringValue = picked == 0 ? "" : types[picked - 1].id;
+                _so.ApplyModifiedProperties();
+            }
+            if (types.Count == 0)
+                EditorGUILayout.HelpBox("No material type (.rmat) in the project is for this garment, so it can't be recoloured. Ros' Wardrobe ships PBR; " +
+                                        "tick the garment in step 8, or make a material type in the Setup tab.", MessageType.Warning);
+            foreach (var t in types.Where(t => t.Problem != null)) EditorGUILayout.HelpBox(t.Problem, MessageType.Warning);
+            if (types.Count > 0)
+                Note($"Buyers can pick: {string.Join(", ", types.Where(t => t.Problem == null).Select(t => t.DisplayName))}.");
+        }
+
+        private void DrawShipped(WardrobeGarment g, WardrobeMaterialType type) {
             if (type == null) return;
-            EditorGUILayout.Space(2);
-            Note($"The prefab ships in it: Make Material writes '{System.IO.Path.GetFileName(WardrobeMaterialTypes.ShippedPath(g, type))}' next to " +
-                 "the .rgarm from the maps below, packing them the way the type needs, and puts it on the prefab. Keep the maps as your " +
-                 "tools export them.");
+            Note($"The prefab ships in it: Make Material writes '{Path.GetFileName(WardrobeMaterialTypes.ShippedPath(g, type))}' next to the .rgarm " +
+                 "from the maps, packed the way the material type says, and puts it on the prefab." +
+                 (WardrobeMaterialTypes.Variant(type, true) ? $" It's a variant of {type.template.name}, so changes to that material show on it." : ""));
             var size = _so.FindProperty("mapSize");
             size.intValue = EditorGUILayout.IntPopup(new GUIContent("Packed Map Size", size.tooltip), size.intValue, MapSizeNames, MapSizes);
             _so.ApplyModifiedProperties();
-            bool made = System.IO.File.Exists(WardrobeMaterialTypes.ShippedPath(g, type));
+            bool made = File.Exists(WardrobeMaterialTypes.ShippedPath(g, type));
             using (new EditorGUILayout.HorizontalScope()) {
-                EditorGUILayout.LabelField(!made ? "Not made yet." : WardrobeMaterialTypes.ShippedUpToDate(g, type) ? "Up to date."
-                    : "Out of date: the maps, the size or the material type changed.", EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.LabelField(g.baseColor == null ? "It needs the base colour map (step 3)." : !made ? "Not made yet."
+                    : WardrobeMaterialTypes.ShippedUpToDate(g, type) ? "Up to date." : "Out of date: the maps, the size or the material type changed.",
+                    EditorStyles.wordWrappedMiniLabel);
                 using (new EditorGUI.DisabledScope(g.baseColor == null))
-                    if (GUILayout.Button(made ? "Make Again" : "Make Material", GUILayout.Width(100)))
-                        Later($"Making {Title(g)}'s material…", () => WardrobeMaterialTypes.Ship(g, type));
+                    if (GUILayout.Button(new GUIContent(made ? "Make Again" : "Make Material", "Makes it, puts it on the prefab, and saves the garment"), GUILayout.Width(100)))
+                        Act($"Making {Title(g)}'s material…", d => WardrobeMaterialTypes.Ship(d, type));
             }
         }
 
+        // ---------------------------------------------------------------- 7. recolouring
+
         private void DrawMaps(WardrobeGarment g) {
+            Note("Recolouring needs an ID map (one flat colour per part of the garment, made from its UV islands) and a gradient map (where each " +
+                 "point is along a gradient). Make them here, or paint your own (ID map: flat colours, black = untouched; gradient: 16-bit grey).");
+            bool missing = g.idMap == null || g.gradientMap == null;
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.LabelField(g.mesh == null ? "Fit it first (step 4)." : missing ? "Not made yet." : "Made.", EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUI.DisabledScope(g.mesh == null))
+                    if (GUILayout.Button(new GUIContent(missing ? "Make Maps" : "Make Again", "Makes the ID and gradient maps next to the .rgarm and saves the garment " +
+                            "(the regions stay; new parts are in none)"), GUILayout.Width(100)))
+                        Act("Making the recolouring maps…", d => {
+                            WardrobeGenerators.GenerateIdMap(d, _idSize, d.regions.Count == 0);
+                            WardrobeGenerators.GenerateGradientMap(d, _gradientSize, _direction);
+                        });
+            }
+            open.TryGetValue("maps", out bool more);
+            open["maps"] = more = EditorGUILayout.Foldout(more, "Maps and sizes", true);
+            if (!more) return;
+            EditorGUI.indentLevel++;
             Field("idMap", "ID Map");
             using (new EditorGUILayout.HorizontalScope()) {
-                GUILayout.Space(EditorGUIUtility.labelWidth + 2);
-                _idSize = EditorGUILayout.IntPopup(_idSize, SizeNames, Sizes, GUILayout.Width(56));
+                EditorGUILayout.PrefixLabel(" ");
+                _idSize = EditorGUILayout.IntPopup(_idSize, SizeNames, Sizes, GUILayout.Width(70));
                 using (new EditorGUI.DisabledScope(g.mesh == null))
-                    if (GUILayout.Button("Generate from UV islands"))
-                        Later("Generating ID map…", () => WardrobeGenerators.GenerateIdMap(g, _idSize, g.regions.Count == 0));
+                    if (GUILayout.Button("Make from UV Islands", EditorStyles.miniButton))
+                        Act("Making the ID map…", d => WardrobeGenerators.GenerateIdMap(d, _idSize, d.regions.Count == 0));
             }
             Field("gradientMap", "Gradient Map");
             using (new EditorGUILayout.HorizontalScope()) {
-                GUILayout.Space(EditorGUIUtility.labelWidth + 2);
-                _gradientSize = EditorGUILayout.IntPopup(_gradientSize, SizeNames, Sizes, GUILayout.Width(56));
+                EditorGUILayout.PrefixLabel(" ");
+                _gradientSize = EditorGUILayout.IntPopup(_gradientSize, SizeNames, Sizes, GUILayout.Width(70));
                 _direction = (WardrobeGenerators.GradientDirection)EditorGUILayout.EnumPopup(_direction);
                 using (new EditorGUI.DisabledScope(g.mesh == null))
-                    if (GUILayout.Button("Generate", GUILayout.Width(70)))
-                        Later("Generating gradient map…", () => WardrobeGenerators.GenerateGradientMap(g, _gradientSize, _direction));
+                    if (GUILayout.Button("Make", EditorStyles.miniButton, GUILayout.Width(50)))
+                        Act("Making the gradient map…", d => WardrobeGenerators.GenerateGradientMap(d, _gradientSize, _direction));
             }
             Field("metresPerUv", "Metres per UV");
+            EditorGUI.indentLevel--;
             _so.ApplyModifiedProperties();
-            EditorGUILayout.HelpBox(
-                "You can also paint these yourself (e.g. in Substance Painter). ID map: one flat colour per part, black = untouched. " +
-                "Gradient map: 16-bit grayscale (R16), black = gradient start, white = end. The maps are written next to the .rgarm.",
-                MessageType.None);
         }
 
-        // ---------------------------------------------------------------- regions
+        private readonly Dictionary<object, bool> open = new Dictionary<object, bool>();
 
         private void DrawRegions(WardrobeGarment g) {
+            if (g.idMap == null) return;
+            EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("Regions", EditorStyles.boldLabel);
-            Note("A region is recoloured as one. Combine the ID map's parts into regions below.");
+            Note("A region is recoloured as one: name it for buyers (Body, Sleeves, Collar…) and put the ID map's parts in it below.");
 
             List<WardrobeBaker.Part> parts;
             try {
@@ -360,6 +696,13 @@ namespace RosDen.Wardrobe.Editor {
                     EditorGUI.BeginChangeCheck();
                     string name = EditorGUILayout.DelayedTextField(region.name);
                     if (EditorGUI.EndChangeCheck()) Rename(g, region, name);
+                    if (GUILayout.Button(EditorGUIUtility.IconContent("icon dropdown"), EditorStyles.label, GUILayout.Width(18))) {
+                        var menu = new GenericMenu();
+                        var picked = region;
+                        foreach (string n in RegionNames.Where(n => g.regions.All(x => x.name != n)))
+                            menu.AddItem(new GUIContent(n), false, () => Rename(g, picked, n));
+                        menu.ShowAsContext();
+                    }
                     var swatches = GUILayoutUtility.GetRect(16 * Mathf.Max(1, region.ids.Count), 16, GUILayout.ExpandWidth(false));
                     for (int k = 0; k < region.ids.Count; k++)
                         EditorGUI.DrawRect(new Rect(swatches.x + k * 16 + 1, swatches.y + 1, 14, 14), region.ids[k]);
@@ -392,6 +735,10 @@ namespace RosDen.Wardrobe.Editor {
                             g.regions.Add(new WardrobeRegion { name = $"Part {i + 1}", ids = new List<Color32> { parts[i].color } });
                         Changed(g);
                     }
+                using (new EditorGUI.DisabledScope(parts.Count == 0))
+                    if (GUILayout.Button(new GUIContent("Copy From Another Fit…", "The regions of the same garment fitted to another avatar: each part " +
+                            "goes in the region most of it is in there (the same pattern pieces have the same UVs)")))
+                        CopyRegionsMenu(g);
             }
 
             if (parts.Count == 0) return;
@@ -422,6 +769,44 @@ namespace RosDen.Wardrobe.Editor {
             }
         }
 
+        // The other fits with regions to copy: the same garment's first, then any other garment's.
+        private void CopyRegionsMenu(WardrobeGarment g) {
+            string self = WardrobeGarments.PathOf(g);
+            var others = WardrobeGarments.All.Where(o => o != g && WardrobeGarments.PathOf(o) != self && o.idMap != null && o.regions.Count > 0).ToList();
+            bool Same(WardrobeGarment o) => !string.IsNullOrWhiteSpace(g.id) && WardrobeConfigs.SameId(o.id, g.id);
+            var menu = new GenericMenu();
+            if (others.Count == 0) menu.AddDisabledItem(new GUIContent("No other garment in the project has regions"));
+            foreach (var o in others.OrderBy(o => Same(o) ? 0 : 1).ThenBy(Title)) {
+                var picked = o;
+                string label = $"{Title(o)} on {AvatarName(o.avatarId)}".Replace("/", "∕");
+                if (!Same(o)) label = "Other garments/" + label;
+                menu.AddItem(new GUIContent(label), false, () => CopyRegions(g, picked));
+            }
+            menu.ShowAsContext();
+        }
+
+        private void CopyRegions(WardrobeGarment g, WardrobeGarment from) {
+            if (g.regions.Count > 0 && !EditorUtility.DisplayDialog("Ros' Wardrobe",
+                    $"Replace {Title(g)}'s regions with {Title(from)}'s (on {AvatarName(from.avatarId)})?", "Replace", "Cancel"))
+                return;
+            WardrobeGenerators.RegionCopy copy;
+            Changing(g, "Copy Regions");
+            try {
+                copy = WardrobeGenerators.CopyRegions(g, from);
+            } catch (Exception e) {
+                EditorUtility.DisplayDialog("Ros' Wardrobe", e.Message, "OK");
+                return;
+            }
+            Changed(g);
+            repaint?.Invoke();
+            string message = $"Copied {from.regions.Count} regions from {Title(from)} on {AvatarName(from.avatarId)}: {copy.placed} parts placed.";
+            if (copy.unplaced > 0) message += $"\n\n{copy.unplaced} parts aren't in the other fit's regions, so they're in none: pick a region for them under Parts.";
+            if (copy.empty.Count > 0) message += $"\n\nNo part landed in {string.Join(", ", copy.empty)}. If this fit has that piece, its UVs differ from the other fit's " +
+                                                 "(or the other fit's ID map was painted): assign it by hand, or remove the region.";
+            message += "\n\nSave to keep them.";
+            EditorUtility.DisplayDialog("Ros' Wardrobe", message, "OK");
+        }
+
         // Renaming a region also renames it in the garment's .rpre files, so they keep working.
         private void Rename(WardrobeGarment g, WardrobeRegion region, string name) {
             name = name.Trim();
@@ -448,25 +833,120 @@ namespace RosDen.Wardrobe.Editor {
             _so.Update();
         }
 
-        // ---------------------------------------------------------------- what's made for it
+        // ---------------------------------------------------------------- 8. what's made for it
 
-        private static void DrawUsage(WardrobeGarment g) {
-            var presets = WardrobePresets.For(g);
-            Note($"{presets.Count} presets (.rpre) in the project are for this fit (they list its id, or no garments). Save as Preset… in the " +
-                 "recolour editor writes one; select it to edit it.");
-            foreach (var preset in presets)
-                using (new EditorGUILayout.HorizontalScope()) {
-                    EditorGUILayout.LabelField(preset.DisplayName, preset.colourways.Count == 0 ? "" : $"{preset.colourways.Count} colourways", EditorStyles.miniLabel);
-                    if (GUILayout.Button("Show", EditorStyles.miniButton, GUILayout.Width(44)))
-                        EditorGUIUtility.PingObject(AssetDatabase.LoadAssetAtPath<Object>(preset.jsonPath));
+        // The material types, patterns and presets in the project, read again when one changes.
+        private List<(string path, string kind, string type, JsonObject json)> Usage() {
+            if (_usage != null && _usageRevision == WardrobeConfigs.Revision) return _usage;
+            _usageRevision = WardrobeConfigs.Revision;
+            _usage = new List<(string, string, string, JsonObject)>();
+            foreach (var (ext, kind) in new[] { (WardrobeConfigs.Material, "material"), (WardrobeConfigs.Pattern, "pattern"), (WardrobeConfigs.Preset, "preset") })
+            foreach (string p in WardrobeConfigs.Paths(ext))
+                try {
+                    var j = WardrobeJson.Parse(File.ReadAllText(p));
+                    _usage.Add((p, kind, j.String("type", "simple").Trim().ToLowerInvariant(), j));
+                } catch {
+                    // the checks tell about files that can't be read
                 }
+            return _usage;
+        }
 
-            EditorGUILayout.Space();
-            var patterns = WardrobePatterns.All.Where(p => p.Fits(g)).ToList();
-            Note($"{patterns.Count} patterns (.rpat) in the project fit it (those that list no garments, or list this one). " +
-                 "Tiling patterns use the part scales from Generate from UV islands.");
-            if (g.partScales.Count == 0)
-                EditorGUILayout.HelpBox("Regenerate the ID map (Generate from UV islands) so patterns know each part's real-world size.", MessageType.Info);
+        private void DrawUsage(WardrobeGarment g) {
+            if (string.IsNullOrWhiteSpace(g.id)) {
+                Note("Give the garment an id first (step 1).");
+                return;
+            }
+            Note("Tick what's for this garment: the file then lists its id. Files that list no garments are for every garment. Presets come from " +
+                 "the recolour editor's Save as Preset.");
+            var files = Usage();
+            string id = g.id.Trim();
+            bool Listed(JsonObject j) => j.Objects("garments").Any(e => WardrobeConfigs.SameId(e.String("garment"), id));
+            bool Every(JsonObject j) => !j.Objects("garments").Any();
+
+            // material types
+            var materials = files.Where(f => f.kind == "material").ToList();
+            EditorGUILayout.LabelField("Material types", EditorStyles.miniBoldLabel);
+            if (materials.Count == 0) Note("None in the project.");
+            foreach (var f in materials) UsageRow(g, f.path, f.json, Name(f.json, f.path), Listed(f.json), Every(f.json), null);
+
+            // patterns
+            var patterns = files.Where(f => f.kind == "pattern").ToList();
+            int forIt = patterns.Count(f => Listed(f.json) || Every(f.json));
+            _patternsOpen = EditorGUILayout.Foldout(_patternsOpen, $"Patterns ({forIt} of {patterns.Count} for it)", true);
+            if (_patternsOpen) {
+                if (patterns.Count > 12) _usageSearch = EditorGUILayout.TextField(_usageSearch, EditorStyles.toolbarSearchField);
+                foreach (var f in patterns.Where(f => _usageSearch.Length == 0 || Name(f.json, f.path).IndexOf(_usageSearch, StringComparison.OrdinalIgnoreCase) >= 0)
+                             .OrderBy(f => Name(f.json, f.path), StringComparer.OrdinalIgnoreCase)) {
+                    string why = f.type == "simple" ? null : f.type == "hybrid" ? "needs a weights map for it" : "needs its picture for it";
+                    UsageRow(g, f.path, f.json, Name(f.json, f.path), Listed(f.json), Every(f.json), why);
+                }
+            }
+
+            // presets (made for one garment's regions)
+            var presets = files.Where(f => f.kind == "preset" && (Listed(f.json) || Every(f.json))).ToList();
+            EditorGUILayout.LabelField($"Presets ({presets.Count})", EditorStyles.miniBoldLabel);
+            if (presets.Count == 0) Note("None yet: recolour it in the window and Save as Preset.");
+            foreach (var f in presets)
+                using (new EditorGUILayout.HorizontalScope()) {
+                    EditorGUILayout.LabelField(Name(f.json, f.path), Every(f.json) ? "every garment" : "", EditorStyles.miniLabel);
+                    if (GUILayout.Button("Open", EditorStyles.miniButton, GUILayout.Width(44))) Show(f.path);
+                }
+            if (g.partScales.Count == 0 && g.idMap != null)
+                EditorGUILayout.HelpBox("Make the ID map again (step 7) so tiling patterns know each part's real size.", MessageType.Info);
+        }
+
+        private static string Name(JsonObject j, string file) {
+            string name = j.String("name").Trim();
+            return name.Length > 0 ? name : Path.GetFileNameWithoutExtension(file);
+        }
+
+        private void UsageRow(WardrobeGarment g, string file, JsonObject j, string name, bool listed, bool every, string needs) {
+            using (new EditorGUILayout.HorizontalScope()) {
+                using (new EditorGUI.DisabledScope(every)) {
+                    EditorGUI.BeginChangeCheck();
+                    bool on = EditorGUILayout.ToggleLeft(new GUIContent(name, file), listed || every, GUILayout.MinWidth(140));
+                    if (EditorGUI.EndChangeCheck()) {
+                        if (on) Tick(g, file);
+                        else Untick(g, file, j);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+                EditorGUILayout.LabelField(every ? "every garment" : listed && needs != null ? needs : "", EditorStyles.miniLabel);
+                if (GUILayout.Button("Open", EditorStyles.miniButton, GUILayout.Width(44))) Show(file);
+            }
+        }
+
+        private void Tick(WardrobeGarment g, string file) {
+            string id = g.id.Trim(), version = WardrobeConfigs.Major(g.version);
+            EditorApplication.delayCall += () => {
+                WardrobeChecks.EditJson(file, j => {
+                    var list = j.Array("garments") ?? new List<object>();
+                    var entry = new JsonObject();
+                    entry["garment"] = id;
+                    if (version.Length > 0) entry["version"] = version;
+                    list.Add(entry);
+                    j["garments"] = list;
+                });
+                repaint?.Invoke();
+            };
+        }
+
+        private void Untick(WardrobeGarment g, string file, JsonObject json) {
+            string id = g.id.Trim();
+            var rest = json.Objects("garments").Where(e => !WardrobeConfigs.SameId(e.String("garment"), id)).ToList();
+            bool maps = json.Objects("garments").Any(e => WardrobeConfigs.SameId(e.String("garment"), id) &&
+                                                          e.Keys.Any(k => k != "garment" && k != "version" && k != "avatar"));
+            string message = rest.Count == 0 ? $"{Path.GetFileName(file)} then lists no garments, so it's for every garment. Untick anyway?"
+                : maps ? $"{Path.GetFileName(file)} has maps for {id}; they're forgotten. Untick anyway?" : null;
+            if (message != null && !EditorUtility.DisplayDialog("Ros' Wardrobe", message, "Untick", "Cancel")) return;
+            EditorApplication.delayCall += () => {
+                WardrobeChecks.EditJson(file, j => {
+                    var list = (j.Array("garments") ?? new List<object>()).Where(e => !(e is JsonObject o && WardrobeConfigs.SameId(o.String("garment"), id))).ToList();
+                    if (list.Count == 0) j.Remove("garments");
+                    else j["garments"] = list;
+                });
+                repaint?.Invoke();
+            };
         }
     }
 }

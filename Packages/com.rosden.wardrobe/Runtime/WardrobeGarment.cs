@@ -37,6 +37,9 @@ namespace RosDen.Wardrobe {
         [Tooltip("Prefab the Ros' Wardrobe window puts on the avatar")]
         public GameObject prefab;
 
+        [Tooltip("Where Make Prefab puts the garment's toggle in the avatar's menu, e.g. Clothing/T-Shirt; empty = Clothing/<name>")]
+        public string menuPath;
+
         [Tooltip("Picture in the Ros' Wardrobe window; rendered from the garment when empty")]
         public Texture2D thumbnail;
 

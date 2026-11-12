@@ -181,7 +181,7 @@ namespace RosDen.Wardrobe.Editor {
             foreach (var output in type.outputs.Where(o => o.albedo))
             foreach (string property in output.Properties)
                 if (material.HasProperty(property)) material.SetTexture(property, _texture);
-            var matrix = WardrobeGenerators.ModelMatrix(g.mesh);
+            var matrix = WardrobeGenerators.ModelMatrix(g.mesh, g);
             var bounds = Transform(g.mesh.bounds, matrix);
 
             // Front view (garments face +Z), framed on the garment's width/height.

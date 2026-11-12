@@ -21,14 +21,23 @@ each slot's colour, and slots marked *can gradient* can be gradients too.
 
 ## Making a pattern
 
-1. Make a folder for the pattern and its maps (`<Pattern>/`), and in it pick
-   **Assets → Create → Ros' Wardrobe → Pattern**. Name the file after the pattern.
-2. Select it. In the Inspector, set its **Name**, **Id** (e.g. `yourname.pinstripe`), **Type** and **Group** (where
-   the picker lists it: Plain, Blocks, Graphics, Stripes, Checks, Weaves, Knits, Prints).
-3. Under **For**, tick the garments it's for. Leave a simple pattern's list empty to offer it for every garment.
-4. Set the **colour slots**, then the maps for its kind (below), and click **Save**.
-
-Then put a garment on in the window, open **Custom**, and try the pattern on a part.
+1. Make a folder for the pattern and its textures (`<Pattern>/`).
+2. In **Tools → Ros' Wardrobe → Setup**, click **New Pattern…** under *Patterns* and save it in that folder. (Or
+   pick **Assets → Create → Ros' Wardrobe → Pattern**; selecting the file shows the same setup in the Inspector.)
+3. Follow the steps:
+   1. **Pattern**: its **Name**, **Id** (e.g. `yourname.pinstripe`; **Use …** suggests one) and **Group** (where the
+      picker lists it: Plain, Blocks, Graphics, Stripes, Checks, Weaves, Knits, Prints).
+   2. **Type**: simple, hybrid or complete (below).
+   3. **Textures**: drag the pattern's textures onto the drop area. Each goes where its name says (`weights`,
+      `normal`, `height`, `surface`/`orm`/`roughness`, `ao`, `mask`, `albedo`/`print`…; a texture with none of these
+      is the weights, or a complete pattern's picture), and is imported the way that needs: normal maps as normal
+      maps, the rest without sRGB, tiling ones repeating. A weights map adds the colours it uses. Drop a texture on a
+      field to change it.
+   4. **Colours**: the colour slots, their names and what they start as.
+   5. **Garments**: **Every garment**, or **Only some garments** with the ones it's for ticked. Hybrid and complete
+      patterns get each garment's maps here (drop them on its drop area).
+   6. **Preview**: the pattern on a garment it fits (save to see your changes).
+4. Click **Save**. Then put a garment on in the window, open **Custom**, and try the pattern on a part.
 
 ### Simple (tiling) patterns
 
@@ -67,15 +76,17 @@ same fabric again updates its maps and keeps your settings.
 
 ### Hybrid patterns
 
-Laid out on one garment's UVs, for designs that depend on the garment's shape. In the pattern's editor, under
-**Garments**, add each garment fit it's for (garment, avatar and version), each with its own:
+Laid out on one garment's UVs, for designs that depend on the garment's shape. Under **Garments**, pick **Only some
+garments** and tick each garment it's for; under *Per garment*, each gets its own (and can be limited to one avatar
+or version there):
 
 - **Weights**: on the garment's UVs, R, G, B, A = colour 1..4. It's an id mask: which colour goes where. Paint it
   over the garment's UV layout, e.g. in Substance Painter, with R where the body colour goes and G on the sleeves.
 - **Gradient** (optional): its own position along the colours' gradients, instead of the garment's gradient map.
   A fade from the chest outwards, say.
 
-Hybrid patterns can also have tiling maps (relief, surface) that apply on top.
+Hybrid patterns can also have tiling maps (relief, surface) that apply on top. A hybrid pattern that lists no
+garments (like the built-in Gradient) is offered for every garment, along each one's own gradient map.
 
 ### Complete patterns
 
@@ -94,6 +105,18 @@ A complete pattern is only offered for the garment fits it has an albedo for.
 - When several packs ship a pattern with the same **id**, it's offered for the garments of all of them. Use your own
   id prefix (`yourname.`) unless you mean to extend someone else's pattern.
 
+### Who ships what
+
+- **A pattern ships with every pack whose garments support it.** If your garments support someone else's pattern,
+  copy its `.rpat` and textures into your pack, keep its id, and tick your garments on it. Buyers who have both packs
+  get one pattern with both lists, and buyers who have only yours still get it.
+- **Hybrid and complete patterns' per-garment maps ship with whoever drew them.** These are painted on one garment's
+  UVs (e.g. in Substance Painter), so a garment maker who offers a colour layout for their garment draws its maps and
+  ships them with the pattern. Each fit (the garment on one avatar) is its own entry with its own maps, since its UVs
+  can differ.
+- **ID maps** you paint yourself (in Substance Painter, say) when the generated one isn't enough, for example a cuff
+  band that's part of a bigger UV island: see [Painting your own maps](making-a-garment.md#painting-your-own-maps).
+
 ## Making looks
 
 A look sets a pattern and colours for the parts of a garment.
@@ -104,12 +127,12 @@ A look sets a pattern and colours for the parts of a garment.
 2. Click **Save as Preset…**. Ros' Wardrobe writes a `.rpre` for the garment.
 3. Move it next to the garment or into the pattern's folder, so it ships with your pack.
 
-**In the Inspector**, select the `.rpre` to edit it, or make one from scratch with
-**Assets → Create → Ros' Wardrobe → Preset**:
+**In Setup → Presets** (or the Inspector, with the `.rpre` selected), edit it, or make one from scratch with
+**New Preset…**:
 
 - **Name**, **Group** and **Order** arrange the Looks gallery.
 - **Look Name** names the look's own colouring ("Navy & White"); each colourway has its own name.
-- **Garments**: which garments it's for. None = any garment, which suits looks that only use `*`.
+- **Garments**: **Every garment**, which suits looks that only use `*`, or **Only some garments**, ticked.
 - **Parts**: a pattern and colours per part. A part names a region (`Body`), several (`Collar, Hem`), or `*` for
   every region no other part names. Using `*` plus a few named trims makes a look work on garments with
   different regions. Each part can also set **Scale** and **Rotate** for tiling patterns.

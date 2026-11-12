@@ -14,6 +14,8 @@ namespace RosDen.Wardrobe.Editor {
     internal abstract class WardrobeForm {
         public readonly string path;
         public Action repaint;
+        /// <summary>Opens another Ros' Wardrobe file (the Setup tab opens it beside; else it's selected).</summary>
+        public Action<string> show;
 
         protected WardrobeForm(string path) => this.path = path;
 
@@ -57,9 +59,96 @@ namespace RosDen.Wardrobe.Editor {
             }
         }
 
+        // ---------------------------------------------------------------- problems
+
+        /// <summary>What the checks found in the file (as saved), each with its fix.</summary>
+        public void DrawProblems() {
+            var problems = WardrobeChecks.For(path);
+            if (problems.Count == 0) return;
+            foreach (var p in problems) DrawProblem(p, this);
+            if (Dirty) EditorGUILayout.LabelField("These are about the file as saved: save to check your changes.", EditorStyles.miniLabel);
+            EditorGUILayout.Space();
+        }
+
+        /// <summary>One problem: its message, and its fix as a button.</summary>
+        internal static void DrawProblem(WardrobeProblem p, WardrobeForm form, Action<string> show = null) {
+            if (show != null) {
+                // in a list (narrow): the file, the message under it, and the fix under that
+                if (GUILayout.Button(new GUIContent(p.File, p.path), EditorStyles.linkLabel)) show(p.path);
+                EditorGUILayout.HelpBox(p.message, p.type);
+                if (p.fix != null)
+                    using (new EditorGUILayout.HorizontalScope()) {
+                        GUILayout.FlexibleSpace();
+                        var label = new GUIContent(p.fix, "Fix it");
+                        if (GUILayout.Button(label, EditorStyles.miniButton, GUILayout.MaxWidth(Mathf.Max(60, EditorStyles.miniButton.CalcSize(label).x + 8))))
+                            Fix(p, form);
+                    }
+                GUILayout.Space(4);
+                return;
+            }
+            using (new EditorGUILayout.HorizontalScope()) {
+                EditorGUILayout.HelpBox(p.message, p.type);
+                if (p.fix != null && GUILayout.Button(new GUIContent(p.fix, "Fix it"), GUILayout.Width(Mathf.Max(70, EditorStyles.miniButton.CalcSize(new GUIContent(p.fix)).x + 12)),
+                        GUILayout.Height(38)))
+                    Fix(p, form);
+            }
+        }
+
+        /// <summary>Runs a problem's fix after the GUI has drawn (saving the open file first, if it's that one).</summary>
+        internal static void Fix(WardrobeProblem p, WardrobeForm form) {
+            EditorApplication.delayCall += () => {
+                if (form != null && form.path == p.path && form.Dirty) {
+                    int choice = EditorUtility.DisplayDialogComplex("Ros' Wardrobe", $"Save your changes to {p.File} first?", "Save", "Cancel", "Discard");
+                    if (choice == 1) return;
+                    if (choice == 0) form.Save();
+                    else form.Revert();
+                }
+                try {
+                    EditorUtility.DisplayProgressBar("Ros' Wardrobe", $"{p.fix}…", 0.5f);
+                    p.apply();
+                } catch (Exception e) {
+                    Debug.LogException(e);
+                    EditorUtility.DisplayDialog("Ros' Wardrobe", e.Message, "OK");
+                } finally {
+                    EditorUtility.ClearProgressBar();
+                    WardrobeChecks.Forget();
+                    form?.repaint?.Invoke();
+                }
+            };
+        }
+
         // ---------------------------------------------------------------- shared fields
 
         protected static void Header(string text) => EditorGUILayout.LabelField(text, EditorStyles.boldLabel);
+
+        /// <summary>Opens another file: in the Setup tab when the form is there, else in the inspector.</summary>
+        protected void Show(string file) {
+            if (show != null) {
+                show(file);
+                return;
+            }
+            var asset = AssetDatabase.LoadMainAssetAtPath(file);
+            Selection.activeObject = asset;
+            EditorGUIUtility.PingObject(asset);
+        }
+
+        /// <summary>A step of a guided setup: its number, title and whether it's done (✓), needs something (!) or isn't yet (○).</summary>
+        protected static void Step(int number, string title, StepState state, string status = null) {
+            EditorGUILayout.Space(6);
+            var rect = EditorGUILayout.GetControlRect(false, 22);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), new Color(0.5f, 0.5f, 0.5f, 0.35f));
+            string mark = state == StepState.Done ? "✓" : state == StepState.Attention ? "!" : "○";
+            var colour = state == StepState.Done ? new Color(0.35f, 0.75f, 0.4f) : state == StepState.Attention ? new Color(0.95f, 0.65f, 0.2f) : Color.gray;
+            var markStyle = new GUIStyle(EditorStyles.boldLabel) { normal = { textColor = colour }, alignment = TextAnchor.MiddleCenter };
+            GUI.Label(new Rect(rect.x, rect.y, 20, rect.height), mark, markStyle);
+            GUI.Label(new Rect(rect.x + 22, rect.y, rect.width - 22, rect.height), $"{number}. {title}", EditorStyles.boldLabel);
+            if (!string.IsNullOrEmpty(status)) {
+                var size = EditorStyles.miniLabel.CalcSize(new GUIContent(status));
+                GUI.Label(new Rect(rect.xMax - size.x, rect.y + 3, size.x, rect.height), status, EditorStyles.miniLabel);
+            }
+        }
+
+        protected enum StepState { Todo, Attention, Done }
 
         protected static void Note(string text) => EditorGUILayout.LabelField(text, EditorStyles.wordWrappedMiniLabel);
 
@@ -302,6 +391,109 @@ namespace RosDen.Wardrobe.Editor {
                 menu.AddItem(new GUIContent("Another (type its id)"), false, () => AddTarget(j, list, "", "", "", added));
                 menu.ShowAsContext();
             }
+        }
+
+        private bool _onlySome;
+
+        /// <summary>
+        /// The "garments" list as a checklist: every garment (no list), or only the ticked ones (one entry per garment id,
+        /// any avatar, its major version). The entries' details (versions, avatars, maps per garment) are in a foldout.
+        /// </summary>
+        protected void Checklist(JsonObject j, string every, string only, Action<JsonObject> extra = null, bool detailsOpen = false,
+            Action<JsonObject> added = null) {
+            var list = j.Array("garments") ?? new List<object>();
+            var entries = list.OfType<JsonObject>().ToList();
+            bool some = entries.Count > 0 || _onlySome;
+            EditorGUI.BeginChangeCheck();
+            int picked = GUILayout.Toolbar(some ? 1 : 0, new[] { "Every garment", "Only some garments" });
+            if (EditorGUI.EndChangeCheck()) {
+                if (picked == 0 && entries.Count > 0 &&
+                    !EditorUtility.DisplayDialog("Ros' Wardrobe", "Forget the garments ticked (and their details)?", "Every Garment", "Cancel")) GUIUtility.ExitGUI();
+                if (picked == 0) j.Remove("garments");
+                _onlySome = picked == 1;
+                GUIUtility.ExitGUI();
+            }
+            if (!some) {
+                Note(every);
+                return;
+            }
+            Note(only);
+            var garments = WardrobeGarments.All.Where(g => !string.IsNullOrWhiteSpace(g.id)).GroupBy(g => g.id.Trim(), StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => Title(x.First()), StringComparer.OrdinalIgnoreCase).ToList();
+            string pack = Pack(path);
+
+            void Tick(string id, string version) {
+                var t = new JsonObject();
+                t["garment"] = id;
+                t["version"] = WardrobeConfigs.Major(version);
+                added?.Invoke(t);
+                list.Add(t);
+                Set(j, "garments", list, false);
+            }
+            void Untick(string id) {
+                var mine = list.OfType<JsonObject>().Where(e => WardrobeConfigs.SameId(e.String("garment"), id)).ToList();
+                bool maps = mine.Any(e => e.Keys.Any(k => k != "garment" && k != "version" && k != "avatar"));
+                if (maps && !EditorUtility.DisplayDialog("Ros' Wardrobe", $"Forget {id}'s maps here too?", "Untick", "Cancel")) return;
+                foreach (var e in mine) list.Remove(e);
+                Set(j, "garments", list, false);
+            }
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox)) {
+                foreach (var x in garments) {
+                    bool on = entries.Any(e => WardrobeConfigs.SameId(e.String("garment"), x.Key));
+                    string avatars = string.Join(", ", x.Select(g => AvatarName(g.avatarId)).Distinct());
+                    using (new EditorGUILayout.HorizontalScope()) {
+                        EditorGUI.BeginChangeCheck();
+                        bool now = EditorGUILayout.ToggleLeft(new GUIContent(Title(x.First()), x.Key), on, GUILayout.MinWidth(120));
+                        if (EditorGUI.EndChangeCheck()) {
+                            if (now) Tick(x.Key, x.First().version);
+                            else Untick(x.Key);
+                            GUIUtility.ExitGUI();
+                        }
+                        EditorGUILayout.LabelField($"on {avatars}", EditorStyles.miniLabel);
+                    }
+                }
+                foreach (string id in entries.Select(e => e.String("garment").Trim()).Where(id => id.Length > 0 && garments.All(x => !WardrobeConfigs.SameId(x.Key, id)))
+                             .Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+                    using (new EditorGUILayout.HorizontalScope()) {
+                        if (!EditorGUILayout.ToggleLeft(new GUIContent(id, "Not in this project"), true, GUILayout.MinWidth(120))) {
+                            Untick(id);
+                            GUIUtility.ExitGUI();
+                        }
+                        EditorGUILayout.LabelField("not in this project (fine when it ships separately)", EditorStyles.miniLabel);
+                    }
+                if (garments.Count == 0) Note("There are no garments in the project yet.");
+                using (new EditorGUILayout.HorizontalScope()) {
+                    if (GUILayout.Button("Tick All", EditorStyles.miniButtonLeft, GUILayout.Width(70))) {
+                        foreach (var x in garments.Where(x => entries.All(e => !WardrobeConfigs.SameId(e.String("garment"), x.Key)))) Tick(x.Key, x.First().version);
+                        GUIUtility.ExitGUI();
+                    }
+                    if (pack != null && GUILayout.Button(new GUIContent("Tick This Pack's", $"The garments under {pack}"), EditorStyles.miniButtonMid, GUILayout.Width(110))) {
+                        foreach (var x in garments.Where(x => x.Any(g => (WardrobeGarments.PathOf(g) ?? "").StartsWith(pack + "/")) &&
+                                                              entries.All(e => !WardrobeConfigs.SameId(e.String("garment"), x.Key))))
+                            Tick(x.Key, x.First().version);
+                        GUIUtility.ExitGUI();
+                    }
+                    if (GUILayout.Button("Untick All", EditorStyles.miniButtonRight, GUILayout.Width(80))) {
+                        list.Clear();
+                        Set(j, "garments", list, false);
+                        _onlySome = true;
+                        GUIUtility.ExitGUI();
+                    }
+                }
+            }
+            if (entries.Count == 0)
+                EditorGUILayout.HelpBox("Tick at least one: with none ticked it's for every garment.", MessageType.Info);
+            if (entries.Count == 0) return;
+            if (!open.TryGetValue(j, out bool details)) details = detailsOpen;
+            open[j] = details = EditorGUILayout.Foldout(details, extra != null ? "Per garment: maps, versions and avatars" : "Per garment: versions and avatars", true);
+            if (details) Targets(j, "", extra, added);
+        }
+
+        /// <summary>The pack a file is in: its first two folders (Assets/&lt;Pack&gt;), or null.</summary>
+        internal static string Pack(string file) {
+            var parts = (file ?? "").Split('/');
+            return parts.Length > 2 ? parts[0] + "/" + parts[1] : null;
         }
 
         private void AddTarget(JsonObject j, List<object> list, string garment, string avatar, string version, Action<JsonObject> added) {

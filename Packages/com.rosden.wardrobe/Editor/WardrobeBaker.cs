@@ -433,32 +433,55 @@ namespace RosDen.Wardrobe.Editor {
                 invert[c] = texture && m.invert ? 1 : 0;
                 value[c] = m != null ? m.value : fallbacks[c];
             }
-            PackPass(textures, channel, invert, value, rt);
+            PackPass(textures, channel, default, invert, value, rt);
         }
 
-        // Each channel of rt from a channel of its texture (-1: the value instead), inverted where asked.
-        private static void PackPass(Texture[] textures, Vector4 channel, Vector4 invert, Vector4 value, RenderTexture rt) {
+        // Each channel of rt from a channel of its texture (-1: the value instead; a mode: worked out from its RGB), inverted where asked.
+        private static void PackPass(Texture[] textures, Vector4 channel, Vector4 mode, Vector4 invert, Vector4 value, RenderTexture rt) {
             var material = BakeMaterial;
             for (int c = 0; c < 4; c++) material.SetTexture("_Pack" + c, textures[c] != null ? textures[c] : Texture2D.whiteTexture);
             material.SetVector("_PackChannel", channel);
+            material.SetVector("_PackMode", mode);
             material.SetVector("_PackInvert", invert);
             material.SetVector("_PackValue", value);
             Blit(Texture2D.whiteTexture, rt, material, 4);
         }
 
         /// <summary>
-        /// Packs a material type's texture into <paramref name="rt"/>: each channel from the albedo (the look's, or the
-        /// garment's), the garment's opacity, or the surface map (R metalness, G roughness, B occlusion, A sheen).
+        /// The garment's normal map as plain XYZ in RGB (0..1, Z up; flat where it has none), at its base colour's size,
+        /// for packing normals into other textures; the caller destroys it.
         /// </summary>
-        public static void Pack(WardrobeGarment g, WardrobeMaterialType.Output output, Texture albedo, Texture surface, RenderTexture rt) {
+        public static RenderTexture GarmentNormal(WardrobeGarment g) {
+            var size = SourceSize(g.baseColor);
+            var rt = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear) {
+                name = "Wardrobe Garment Normal", hideFlags = HideFlags.HideAndDontSave,
+            };
+            Blit(g.normalMap != null ? g.normalMap : Texture2D.normalTexture, rt, BakeMaterial, 1);
+            return rt;
+        }
+
+        /// <summary>
+        /// Packs a material type's texture into <paramref name="rt"/>: each channel from the albedo (the look's, or the
+        /// garment's), the garment's opacity, the surface map (R metalness, G roughness, B occlusion, A sheen) or the normal
+        /// map (plain XYZ in RGB: <see cref="GarmentNormal"/>, or a look's), as it is or inverted.
+        /// </summary>
+        public static void Pack(WardrobeGarment g, WardrobeMaterialType.Output output, Texture albedo, Texture surface, Texture normal, RenderTexture rt) {
             var textures = new Texture[4];
-            Vector4 channel = default, invert = default, value = default;
+            Vector4 channel = default, mode = default, invert = default, value = default;
             for (int c = 0; c < 4; c++) {
                 var source = output.albedo ? (c < 3 ? WardrobeMaterialType.Source.AlbedoR + c : WardrobeMaterialType.Source.Opacity) : output.channels[c];
                 Texture texture = null;
-                int pick = -1;
+                int pick = -1, how = 0;
                 bool flip = false;
                 switch (source) {
+                    case WardrobeMaterialType.Source.AlbedoLuminance: texture = albedo; pick = 0; how = 1; break;
+                    case WardrobeMaterialType.Source.NormalX: texture = normal; pick = 0; break;
+                    case WardrobeMaterialType.Source.NormalY: texture = normal; pick = 1; break;
+                    case WardrobeMaterialType.Source.NormalZ: texture = normal; pick = 2; break;
+                    case WardrobeMaterialType.Source.NormalOctU: texture = normal; pick = 0; how = 2; break;
+                    case WardrobeMaterialType.Source.NormalOctV: texture = normal; pick = 0; how = 3; break;
+                    case WardrobeMaterialType.Source.NormalHemiOctU: texture = normal; pick = 0; how = 4; break;
+                    case WardrobeMaterialType.Source.NormalHemiOctV: texture = normal; pick = 0; how = 5; break;
                     case WardrobeMaterialType.Source.AlbedoR:
                     case WardrobeMaterialType.Source.AlbedoG:
                     case WardrobeMaterialType.Source.AlbedoB:
@@ -481,12 +504,20 @@ namespace RosDen.Wardrobe.Editor {
                     case WardrobeMaterialType.Source.Occlusion: texture = surface; pick = 2; break;
                     case WardrobeMaterialType.Source.Sheen: texture = surface; pick = 3; break;
                 }
+                if (texture == null && WardrobeMaterialType.IsNormal(source)) {
+                    // no normal map: flat, as a value
+                    var flat = source == WardrobeMaterialType.Source.NormalZ ? 1f : 0.5f;
+                    value[c] = output.invert[c] ? 1 - flat : flat;
+                    channel[c] = -1;
+                    continue;
+                }
                 textures[c] = texture;
                 channel[c] = texture != null ? pick : -1;
-                invert[c] = flip ? 1 : 0;
+                mode[c] = how;
+                invert[c] = flip != (!output.albedo && output.invert[c]) ? 1 : 0;
                 value[c] = output.albedo ? 1 : output.values[c];
             }
-            PackPass(textures, channel, invert, value, rt);
+            PackPass(textures, channel, mode, invert, value, rt);
         }
 
         /// <summary>The look's surface map at preview size, or null when no pattern it uses has surface or occlusion maps.</summary>
@@ -501,9 +532,10 @@ namespace RosDen.Wardrobe.Editor {
         }
 
         /// <summary>A material type's texture for the live preview, packed from the preview albedo and surface.</summary>
-        public static RenderTexture RenderPreviewOutput(WardrobeGarment g, WardrobeMaterialType.Output output, Texture albedo, Texture surface, RenderTexture rt) {
+        public static RenderTexture RenderPreviewOutput(WardrobeGarment g, WardrobeMaterialType.Output output, Texture albedo, Texture surface, Texture normal,
+            RenderTexture rt) {
             rt = PreviewTarget(g, rt, "Wardrobe Preview " + output.property, RenderTextureReadWrite.Linear);
-            Pack(g, output, albedo, surface, rt);
+            Pack(g, output, albedo, surface, normal, rt);
             return rt;
         }
 
@@ -632,7 +664,17 @@ namespace RosDen.Wardrobe.Editor {
 
             string materialPath = $"{folder}/{name}.mat";
             var result = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
-            if (result == null) {
+            if (WardrobeMaterialTypes.Variant(type, false)) {
+                // a variant of the garment's material in the type (itself one of the type's material): changes to that
+                // material show on the look too, as only what the look changes is its own
+                if (result == null) {
+                    result = new Material(start) { parent = start };
+                    AssetDatabase.CreateAsset(result, materialPath);
+                } else {
+                    if (result.parent != start) result.parent = start;
+                    result.RevertAllPropertyOverrides();
+                }
+            } else if (result == null) {
                 result = new Material(start);
                 AssetDatabase.CreateAsset(result, materialPath);
             } else {
@@ -640,26 +682,30 @@ namespace RosDen.Wardrobe.Editor {
             }
             result.name = name;
 
-            bool surfaceLook = HasSurface(g, rc.look);
+            bool surfaceLook = HasSurface(g, rc.look), reliefLook = HasRelief(g, rc.look);
             Texture normal = null;
-            RenderTexture surface = null;
+            RenderTexture surface = null, normalRt = null;
             try {
                 foreach (var output in type.outputs) {
                     Texture texture;
                     if (output.albedo) {
                         texture = WardrobeMaterialTypes.OpacityIsAlbedoAlpha(g) ? albedo
-                            : WardrobeMaterialTypes.WritePacked(g, $"{folder}/{name} {output.property.TrimStart('_')}.png", output, albedo, null);
+                            : WardrobeMaterialTypes.WritePacked(g, $"{folder}/{name} {output.property.TrimStart('_')}.png", output, albedo, null, null);
                     } else if (output.normal) {
-                        if (!HasRelief(g, rc.look)) continue;   // the type's own (the garment's) is right
+                        if (!reliefLook) continue;   // the type's own (the garment's) is right
                         if (normal == null) normal = WriteNormal(g, rc.look, $"{folder}/{name}_Normal.png");
                         texture = normal;
                     } else {
-                        if (!output.UsesAlbedo && !(output.UsesSurface && surfaceLook)) continue;
+                        if (!output.UsesAlbedo && !(output.UsesSurface && surfaceLook) && !(output.UsesNormal && reliefLook)) continue;
                         if (output.UsesSurface && surface == null) {
                             surface = GarmentSurface(g);
                             RenderSurface(g, rc.look, surface);
                         }
-                        texture = WardrobeMaterialTypes.WritePacked(g, $"{folder}/{name} {output.property.TrimStart('_')}.png", output, albedo, surface);
+                        if (output.UsesNormal && normalRt == null) {
+                            normalRt = GarmentNormal(g);
+                            if (reliefLook) RenderNormal(g, rc.look, normalRt, g.normalMap);
+                        }
+                        texture = WardrobeMaterialTypes.WritePacked(g, $"{folder}/{name} {output.property.TrimStart('_')}.png", output, albedo, surface, normalRt);
                     }
                     foreach (string property in output.Properties)
                         if (result.HasProperty(property)) result.SetTexture(property, texture);
@@ -667,6 +713,7 @@ namespace RosDen.Wardrobe.Editor {
                 }
             } finally {
                 if (surface != null) Object.DestroyImmediate(surface);
+                if (normalRt != null) Object.DestroyImmediate(normalRt);
             }
             EditorUtility.SetDirty(result);
             AssetDatabase.SaveAssetIfDirty(result);

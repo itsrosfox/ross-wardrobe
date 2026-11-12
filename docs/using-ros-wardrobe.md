@@ -88,6 +88,11 @@ right avatar at the top. If your avatar is a renamed copy of the base, tick *Sho
 **It warns that a garment needs a tool I haven't installed.**
 Usually VRCFury. Install it through VCC: without it, the garment wouldn't be put on the avatar in-game.
 
+**Something about a garment looks wrong (no material, missing regions, it isn't listed).**
+Open the window's **Setup** tab: its **Checks** go through every Ros' Wardrobe file in the project and say what's
+wrong, most with a button that fixes it. If it's a problem in the garment pack itself, tell its creator what the
+check says.
+
 **My look didn't upload.**
 Looks are baked before VRChat builds the avatar. If a look still shows only as a preview, close the window or save
 the scene before uploading, and check `Assets/Wardrobe Recolors`.
